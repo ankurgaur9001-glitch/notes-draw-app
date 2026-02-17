@@ -87,6 +87,8 @@ export default function App() {
   const [isDrawing, setIsDrawing] = useState(false)
   const [isSelecting, setIsSelecting] = useState(false)
   const [selectionRect, setSelectionRect] = useState<{ x: number, y: number, width: number, height: number } | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingText, setEditingText] = useState('')
   const [history, setHistory] = useState<Shape[][]>([])
   const [redoStack, setRedoStack] = useState<Shape[][]>([])
   const [stageScale, setStageScale] = useState(1)
@@ -205,6 +207,10 @@ export default function App() {
     if (!p) return
 
     if (activeTool === 'select') {
+      if (editingId) {
+        finishEditing()
+        return
+      }
       const pointer = stage.getPointerPosition()
       if (!pointer) return
       const intersection = stage.getIntersection(pointer)
@@ -224,27 +230,24 @@ export default function App() {
     }
 
     if (activeTool === 'text') {
-      const text = prompt('Enter text')
-      if (!text) return
-
-      const nextScene: Shape[] = [
-        ...shapes,
-        {
-          id: uid(),
-          type: 'text',
-          x: p.x,
-          y: p.y,
-          text,
-          fontSize: 24,
-          stroke,
-          fill: '#00000000',
-          strokeWidth,
-          roughness,
-          fillStyle,
-        },
-      ]
-
-      commitScene(nextScene)
+      const id = uid()
+      const newTextShape: TextShape = {
+        id,
+        type: 'text',
+        x: p.x,
+        y: p.y,
+        text: '',
+        fontSize: 24,
+        stroke,
+        fill: '#00000000',
+        strokeWidth,
+        roughness,
+        fillStyle,
+      }
+      
+      setShapes(prev => [...prev, newTextShape])
+      setEditingId(id)
+      setEditingText('')
       return
     }
 
@@ -409,6 +412,19 @@ export default function App() {
     setSelectedIds([])
   }, [selectedIds, shapes])
 
+  const finishEditing = useCallback(() => {
+    if (!editingId) return
+    const shape = shapes.find(s => s.id === editingId) as TextShape | undefined
+    if (shape && editingText.trim() === '') {
+      setShapes(prev => prev.filter(s => s.id !== editingId))
+    } else {
+      setShapes(prev => prev.map(s => s.id === editingId ? { ...s, text: editingText } : s))
+      pushUndoState(shapes.filter(s => s.id !== editingId))
+    }
+    setEditingId(null)
+    setEditingText('')
+  }, [editingId, editingText, shapes])
+
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(shapes, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -509,6 +525,17 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (editingId) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault()
+          finishEditing()
+        }
+        if (event.key === 'Escape') {
+          finishEditing()
+        }
+        return
+      }
+
       const target = event.target as HTMLElement | null
       const isTyping = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable
       if (isTyping) return
@@ -567,6 +594,22 @@ export default function App() {
 
   return (
     <div className="workspace-shell">
+      {editingId && (
+        <textarea
+          autoFocus
+          className="inline-text-editor"
+          style={{
+            position: 'absolute',
+            top: (shapes.find(s => s.id === editingId) as TextShape).y * stageScale + stagePos.y,
+            left: (shapes.find(s => s.id === editingId) as TextShape).x * stageScale + stagePos.x,
+            fontSize: (shapes.find(s => s.id === editingId) as TextShape).fontSize * stageScale,
+            color: (shapes.find(s => s.id === editingId) as TextShape).stroke,
+          }}
+          value={editingText}
+          onChange={(e) => setEditingText(e.target.value)}
+          onBlur={finishEditing}
+        />
+      )}
       <Stage
         ref={(node) => {
           stageRef.current = node
@@ -706,6 +749,23 @@ export default function App() {
                   fontSize={shape.fontSize}
                   fill={shape.stroke}
                   draggable={activeTool === 'select' && isSelected}
+                  onDragEnd={(event: Konva.KonvaEventObject<DragEvent>) => {
+                    if (event.target !== event.currentTarget) return;
+                    const nodeX = event.target.x()
+                    const nodeY = event.target.y()
+
+                    setShapes(prev => prev.map(s => {
+                      if (s.id === shape.id && (s.type === 'rect' || s.type === 'ellipse' || s.type === 'text')) {
+                        return { ...s, x: s.x + nodeX, y: s.y + nodeY }
+                      }
+                      return s
+                    }))
+                    event.target.position({ x: 0, y: 0 })
+                  }}
+                  onDblClick={() => {
+                    setEditingId(shape.id)
+                    setEditingText(shape.text)
+                  }}
                   onClick={(e: any) => {
                     if (activeTool !== 'select') return;
                     e.cancelBubble = true;
