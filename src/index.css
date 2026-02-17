@@ -235,6 +235,20 @@ button:hover,
   color: #4f46e5;
 }
 
+.inline-text-editor {
+  z-index: 100;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  outline: none;
+  resize: none;
+  font-family: inherit;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
 @media (max-width: 980px) {
   .right-panel {
     display: none;

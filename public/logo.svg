@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- A "sketchy" pencil tip forming an 'A' for Antigravity/Agentic -->
+  <path d="M20 80 L50 20 L80 80" stroke="#4f46e5" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+  <path d="M35 60 L65 60" stroke="#4f46e5" stroke-width="8" stroke-linecap="round" fill="none" />
+  <!-- A small "gravity" spark or node -->
+  <circle cx="50" cy="45" r="6" fill="#f43f5e" />
+  <!-- Hand-drawn style flourish -->
+  <path d="M20 85 Q50 95 80 85" stroke="#6366f1" stroke-width="4" stroke-linecap="round" fill="none" opacity="0.6" />
+</svg>
