@@ -2,17 +2,26 @@
 
 A lightweight whiteboard app inspired by Excalidraw, built with your own codebase (not embedding the full Excalidraw package).
 
-## Implemented (v1)
+## Implemented
 
-- Infinite-feel canvas with **zoom** (mouse wheel) and **pan** (Pan tool)
+- Excalidraw-style layout shell:
+  - floating **top action bar**
+  - **left tool rail** with shortcuts
+  - **right properties panel**
+  - **bottom HUD** for quick hints
+- Infinite-feel canvas with **zoom** + **pan**
 - Tools: **Select, Rectangle, Ellipse, Line, Arrow, Free Draw, Text**
+- Keyboard shortcuts (V/H/R/O/L/A/P/T, undo/redo, delete, space-pan)
 - Stroke / fill / stroke width controls
 - Select + drag shapes
 - Undo / redo
 - Clear canvas
 - Save / load drawing as JSON
 - Export drawing as PNG
-- Generate **share link** that encodes the current drawing in URL
+- Shareable links:
+  - hosted short links via JSONBlob (`?blob=<id>`)
+  - fallback encoded links (`?drawing=...`)
+- Local autosave + restore
 
 ## Stack
 
@@ -35,5 +44,5 @@ npm run preview
 
 ## Notes
 
-- This is an MVP foundation for a fuller Excalidraw-like app.
-- Next steps can include: resize handles, multi-select, keyboard shortcuts, better text editing, and real-time collaboration.
+- This is your custom implementation (not the full Excalidraw embed).
+- Product roadmap: see `ROADMAP.md`.

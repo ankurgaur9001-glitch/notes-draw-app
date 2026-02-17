@@ -1,9 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Arrow, Ellipse, Layer, Line, Rect, Stage, Text } from 'react-konva'
+import { Arrow as KonvaArrow, Ellipse, Layer, Line, Rect, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
+import {
+  ArrowRight,
+  Circle as CircleIcon,
+  Download,
+  Hand,
+  ImageDown,
+  Minus,
+  MousePointer2,
+  Pencil,
+  Redo2,
+  Share2,
+  Square,
+  Trash2,
+  Type,
+  Undo2,
+  Upload,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import './index.css'
 
-type Tool = 'select' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'draw' | 'text' | 'pan'
+type Tool = 'select' | 'pan' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'draw' | 'text'
 
 type ShapeBase = {
   id: string
@@ -20,15 +40,38 @@ type TextShape = ShapeBase & { type: 'text'; x: number; y: number; text: string;
 
 type Shape = RectShape | EllipseShape | LineShape | DrawShape | TextShape
 
-const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`
+type ToolDefinition = {
+  id: Tool
+  label: string
+  shortcut: string
+  icon: LucideIcon
+}
+
+const TOOL_DEFINITIONS: ToolDefinition[] = [
+  { id: 'select', label: 'Select', shortcut: 'V', icon: MousePointer2 },
+  { id: 'pan', label: 'Hand', shortcut: 'H', icon: Hand },
+  { id: 'rect', label: 'Rectangle', shortcut: 'R', icon: Square },
+  { id: 'ellipse', label: 'Ellipse', shortcut: 'O', icon: CircleIcon },
+  { id: 'line', label: 'Line', shortcut: 'L', icon: Minus },
+  { id: 'arrow', label: 'Arrow', shortcut: 'A', icon: ArrowRight },
+  { id: 'draw', label: 'Pencil', shortcut: 'P', icon: Pencil },
+  { id: 'text', label: 'Text', shortcut: 'T', icon: Type },
+]
 
 const SNAPSHOT_LIMIT = 100
+const LOCAL_SCENE_KEY = 'notes-draw-app.scene.v2'
+const JSONBLOB_ENDPOINT = 'https://jsonblob.com/api/jsonBlob'
+
+const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`
 
 const encodeDrawing = (input: Shape[]) => btoa(unescape(encodeURIComponent(JSON.stringify(input))))
 const decodeDrawing = (input: string) => JSON.parse(decodeURIComponent(escape(atob(input)))) as Shape[]
 
+const clampScale = (value: number) => Math.max(0.2, Math.min(4, value))
+
 export default function App() {
   const [tool, setTool] = useState<Tool>('select')
+  const [spacePan, setSpacePan] = useState(false)
   const [stroke, setStroke] = useState('#111827')
   const [fill, setFill] = useState('#00000000')
   const [strokeWidth, setStrokeWidth] = useState(2)
@@ -39,99 +82,218 @@ export default function App() {
   const [redoStack, setRedoStack] = useState<Shape[][]>([])
   const [stageScale, setStageScale] = useState(1)
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
+  const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight })
+  const [shareState, setShareState] = useState<'idle' | 'publishing' | 'copied' | 'failed'>('idle')
 
-  const containerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage | null>(null)
   const draftRef = useRef<Shape | null>(null)
+  const drawSnapshotRef = useRef<Shape[] | null>(null)
+  const dragSnapshotRef = useRef<Shape[] | null>(null)
+
+  const activeTool = spacePan ? 'pan' : tool
+  const selectedShape = useMemo(() => shapes.find((shape) => shape.id === selectedId) ?? null, [selectedId, shapes])
+
+  useEffect(() => {
+    const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight })
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  useEffect(() => {
+    const loadScene = async () => {
+      try {
+        const params = new URLSearchParams(window.location.search)
+        const blobId = params.get('blob')
+
+        if (blobId) {
+          const response = await fetch(`${JSONBLOB_ENDPOINT}/${blobId}`)
+          if (response.ok) {
+            const payload = (await response.json()) as Shape[]
+            if (Array.isArray(payload)) {
+              setShapes(payload)
+              return
+            }
+          }
+        }
+
+        const encoded = params.get('drawing')
+        if (encoded) {
+          const parsed = decodeDrawing(encoded)
+          if (Array.isArray(parsed)) {
+            setShapes(parsed)
+            return
+          }
+        }
+
+        const localScene = localStorage.getItem(LOCAL_SCENE_KEY)
+        if (localScene) {
+          const parsed = JSON.parse(localScene) as Shape[]
+          if (Array.isArray(parsed)) setShapes(parsed)
+        }
+      } catch (error) {
+        console.error('Failed to hydrate scene', error)
+      }
+    }
+
+    void loadScene()
+  }, [])
 
   useEffect(() => {
     try {
-      const params = new URLSearchParams(window.location.search)
-      const encoded = params.get('drawing')
-      if (!encoded) return
-      const parsed = decodeDrawing(encoded)
-      if (Array.isArray(parsed)) setShapes(parsed)
+      localStorage.setItem(LOCAL_SCENE_KEY, JSON.stringify(shapes))
     } catch (error) {
-      console.error('Invalid share link payload', error)
+      console.error('Autosave failed', error)
     }
-  }, [])
+  }, [shapes])
 
-  const viewport = useMemo(() => {
-    const w = containerRef.current?.clientWidth ?? window.innerWidth
-    const h = containerRef.current?.clientHeight ?? window.innerHeight
-    return { width: w, height: h }
-  }, [containerRef.current?.clientWidth, containerRef.current?.clientHeight])
-
-  const pushHistory = (nextShapes: Shape[]) => {
-    setHistory((prev) => [...prev.slice(-SNAPSHOT_LIMIT + 1), shapes])
+  const pushUndoState = (previousScene: Shape[]) => {
+    setHistory((prev) => [...prev.slice(-SNAPSHOT_LIMIT + 1), previousScene])
     setRedoStack([])
-    setShapes(nextShapes)
+  }
+
+  const commitScene = (nextScene: Shape[], previousScene: Shape[] = shapes) => {
+    pushUndoState(previousScene)
+    setShapes(nextScene)
   }
 
   const pointerToCanvas = (stage: Konva.Stage) => {
     const pointer = stage.getPointerPosition()
     if (!pointer) return null
+
     return {
       x: (pointer.x - stagePos.x) / stageScale,
       y: (pointer.y - stagePos.y) / stageScale,
     }
   }
 
+  const setZoomAroundPoint = (nextScale: number, pivot: { x: number; y: number }) => {
+    const oldScale = stageScale
+    const limitedScale = clampScale(nextScale)
+
+    const mousePointTo = {
+      x: (pivot.x - stagePos.x) / oldScale,
+      y: (pivot.y - stagePos.y) / oldScale,
+    }
+
+    setStageScale(limitedScale)
+    setStagePos({
+      x: pivot.x - mousePointTo.x * limitedScale,
+      y: pivot.y - mousePointTo.y * limitedScale,
+    })
+  }
+
+  const zoomByStep = (direction: 1 | -1) => {
+    setZoomAroundPoint(stageScale + direction * 0.1, {
+      x: viewport.width / 2,
+      y: viewport.height / 2,
+    })
+  }
+
   const handleMouseDown = () => {
     const stage = stageRef.current
     if (!stage) return
+
     const p = pointerToCanvas(stage)
     if (!p) return
 
-    if (tool === 'select') {
+    if (activeTool === 'select') {
       const pointer = stage.getPointerPosition()
       const clickedOnEmpty = !pointer || stage.getIntersection(pointer) == null
       if (clickedOnEmpty) setSelectedId(null)
       return
     }
 
-    if (tool === 'text') {
+    if (activeTool === 'text') {
       const text = prompt('Enter text')
       if (!text) return
-      pushHistory([
+
+      const nextScene: Shape[] = [
         ...shapes,
-        { id: uid(), type: 'text', x: p.x, y: p.y, text, fontSize: 24, stroke, fill: '#00000000', strokeWidth },
-      ])
+        {
+          id: uid(),
+          type: 'text',
+          x: p.x,
+          y: p.y,
+          text,
+          fontSize: 24,
+          stroke,
+          fill: '#00000000',
+          strokeWidth,
+        },
+      ]
+
+      commitScene(nextScene)
       return
     }
 
-    setIsDrawing(true)
-    const id = uid()
-    if (tool === 'rect') draftRef.current = { id, type: 'rect', x: p.x, y: p.y, width: 1, height: 1, stroke, fill, strokeWidth }
-    if (tool === 'ellipse') draftRef.current = { id, type: 'ellipse', x: p.x, y: p.y, radiusX: 1, radiusY: 1, stroke, fill, strokeWidth }
-    if (tool === 'line') draftRef.current = { id, type: 'line', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth }
-    if (tool === 'arrow') draftRef.current = { id, type: 'arrow', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth }
-    if (tool === 'draw') draftRef.current = { id, type: 'draw', points: [p.x, p.y], stroke, fill: '#00000000', strokeWidth }
+    if (activeTool === 'pan') return
 
-    if (draftRef.current) setShapes((prev) => [...prev, draftRef.current as Shape])
+    drawSnapshotRef.current = shapes
+    setIsDrawing(true)
+
+    const id = uid()
+
+    if (activeTool === 'rect') {
+      draftRef.current = { id, type: 'rect', x: p.x, y: p.y, width: 1, height: 1, stroke, fill, strokeWidth }
+    }
+
+    if (activeTool === 'ellipse') {
+      draftRef.current = { id, type: 'ellipse', x: p.x, y: p.y, radiusX: 1, radiusY: 1, stroke, fill, strokeWidth }
+    }
+
+    if (activeTool === 'line') {
+      draftRef.current = { id, type: 'line', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth }
+    }
+
+    if (activeTool === 'arrow') {
+      draftRef.current = { id, type: 'arrow', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth }
+    }
+
+    if (activeTool === 'draw') {
+      draftRef.current = { id, type: 'draw', points: [p.x, p.y], stroke, fill: '#00000000', strokeWidth }
+    }
+
+    if (draftRef.current) {
+      setShapes((prev) => [...prev, draftRef.current as Shape])
+    }
   }
 
   const handleMouseMove = () => {
     if (!isDrawing || !draftRef.current) return
+
     const stage = stageRef.current
     if (!stage) return
+
     const p = pointerToCanvas(stage)
     if (!p) return
 
     setShapes((prev) => {
       const next = [...prev]
-      const idx = next.findIndex((s) => s.id === draftRef.current?.id)
+      const idx = next.findIndex((shape) => shape.id === draftRef.current?.id)
       if (idx < 0) return prev
+
       const shape = next[idx]
+
       if (shape.type === 'rect') {
         next[idx] = { ...shape, width: p.x - shape.x, height: p.y - shape.y }
       } else if (shape.type === 'ellipse') {
-        next[idx] = { ...shape, radiusX: Math.abs(p.x - shape.x), radiusY: Math.abs(p.y - shape.y) }
+        next[idx] = {
+          ...shape,
+          radiusX: Math.abs(p.x - shape.x),
+          radiusY: Math.abs(p.y - shape.y),
+        }
       } else if (shape.type === 'line' || shape.type === 'arrow') {
-        next[idx] = { ...shape, points: [shape.points[0], shape.points[1], p.x, p.y] }
+        next[idx] = {
+          ...shape,
+          points: [shape.points[0], shape.points[1], p.x, p.y],
+        }
       } else if (shape.type === 'draw') {
-        next[idx] = { ...shape, points: [...shape.points, p.x, p.y] }
+        next[idx] = {
+          ...shape,
+          points: [...shape.points, p.x, p.y],
+        }
       }
+
       draftRef.current = next[idx]
       return next
     })
@@ -139,180 +301,469 @@ export default function App() {
 
   const handleMouseUp = () => {
     if (!isDrawing) return
+
     setIsDrawing(false)
+
+    setShapes((prev) =>
+      prev.map((shape) => {
+        if (shape.id !== draftRef.current?.id) return shape
+
+        if (shape.type === 'rect') {
+          const normalizedWidth = Math.abs(shape.width)
+          const normalizedHeight = Math.abs(shape.height)
+          return {
+            ...shape,
+            x: shape.width < 0 ? shape.x + shape.width : shape.x,
+            y: shape.height < 0 ? shape.y + shape.height : shape.y,
+            width: normalizedWidth,
+            height: normalizedHeight,
+          }
+        }
+
+        return shape
+      }),
+    )
+
+    if (drawSnapshotRef.current) {
+      pushUndoState(drawSnapshotRef.current)
+    }
+
+    drawSnapshotRef.current = null
     draftRef.current = null
-    setHistory((prev) => [...prev.slice(-SNAPSHOT_LIMIT + 1), shapes])
-    setRedoStack([])
   }
 
-  const updateShape = (id: string, updater: (s: Shape) => Shape) => {
-    setShapes((prev) => prev.map((s) => (s.id === id ? updater(s) : s)))
+  const updateShape = (id: string, updater: (shape: Shape) => Shape) => {
+    setShapes((prev) => prev.map((shape) => (shape.id === id ? updater(shape) : shape)))
   }
 
   const undo = () => {
     if (!history.length) return
-    const prev = history[history.length - 1]
-    setRedoStack((r) => [shapes, ...r].slice(0, SNAPSHOT_LIMIT))
-    setHistory((h) => h.slice(0, -1))
-    setShapes(prev)
+
+    const previousScene = history[history.length - 1]
+    setRedoStack((prev) => [shapes, ...prev].slice(0, SNAPSHOT_LIMIT))
+    setHistory((prev) => prev.slice(0, -1))
+    setShapes(previousScene)
+    setSelectedId(null)
   }
 
   const redo = () => {
     if (!redoStack.length) return
-    const next = redoStack[0]
-    setHistory((h) => [...h.slice(-SNAPSHOT_LIMIT + 1), shapes])
-    setRedoStack((r) => r.slice(1))
-    setShapes(next)
+
+    const nextScene = redoStack[0]
+    setHistory((prev) => [...prev.slice(-SNAPSHOT_LIMIT + 1), shapes])
+    setRedoStack((prev) => prev.slice(1))
+    setShapes(nextScene)
+    setSelectedId(null)
+  }
+
+  const removeSelected = () => {
+    if (!selectedId) return
+    commitScene(shapes.filter((shape) => shape.id !== selectedId))
+    setSelectedId(null)
   }
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(shapes, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'drawing.json'
-    a.click()
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'drawing.json'
+    anchor.click()
     URL.revokeObjectURL(url)
   }
 
-  const importJson: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
-    const file = e.target.files?.[0]
+  const importJson = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
     if (!file) return
-    const text = await file.text()
-    const parsed = JSON.parse(text) as Shape[]
-    pushHistory(parsed)
+
+    try {
+      const content = await file.text()
+      const parsed = JSON.parse(content) as Shape[]
+      if (!Array.isArray(parsed)) return
+      commitScene(parsed)
+      setSelectedId(null)
+    } catch (error) {
+      console.error('Failed to import JSON', error)
+      alert('Invalid JSON file')
+    } finally {
+      event.target.value = ''
+    }
   }
 
   const exportPng = () => {
-    const url = stageRef.current?.toDataURL({ pixelRatio: 2 })
-    if (!url) return
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'drawing.png'
-    a.click()
+    const dataUrl = stageRef.current?.toDataURL({ pixelRatio: 2 })
+    if (!dataUrl) return
+
+    const anchor = document.createElement('a')
+    anchor.href = dataUrl
+    anchor.download = 'drawing.png'
+    anchor.click()
+  }
+
+  const copyText = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      return true
+    } catch {
+      window.prompt('Copy this link:', value)
+      return false
+    }
   }
 
   const shareDrawing = async () => {
     try {
-      const encoded = encodeDrawing(shapes)
-      const shareUrl = `${window.location.origin}${window.location.pathname}?drawing=${encodeURIComponent(encoded)}`
-      await navigator.clipboard.writeText(shareUrl)
-      alert('Share link copied to clipboard')
-    } catch {
-      alert('Unable to create share link for this browser/session')
+      setShareState('publishing')
+
+      const response = await fetch(JSONBLOB_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(shapes),
+      })
+
+      if (!response.ok) throw new Error(`Share publish failed: ${response.status}`)
+
+      const location = response.headers.get('Location')
+      const blobId = location?.split('/').pop()
+
+      if (!blobId) throw new Error('Missing blob id')
+
+      const shareUrl = `${window.location.origin}${window.location.pathname}?blob=${blobId}`
+
+      if (navigator.share && window.innerWidth < 900) {
+        await navigator.share({
+          title: 'Notes Draw App scene',
+          text: 'Open this drawing',
+          url: shareUrl,
+        })
+      } else {
+        await copyText(shareUrl)
+      }
+
+      setShareState('copied')
+      window.setTimeout(() => setShareState('idle'), 2200)
+    } catch (error) {
+      console.error(error)
+      const fallback = `${window.location.origin}${window.location.pathname}?drawing=${encodeURIComponent(
+        encodeDrawing(shapes),
+      )}`
+      await copyText(fallback)
+      setShareState('failed')
+      window.setTimeout(() => setShareState('idle'), 2500)
     }
   }
 
-  const clearAll = () => pushHistory([])
+  const clearAll = () => {
+    if (!shapes.length) return
+    commitScene([])
+    setSelectedId(null)
+  }
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const isTyping = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable
+      if (isTyping) return
+
+      if (event.code === 'Space') {
+        event.preventDefault()
+        setSpacePan(true)
+        return
+      }
+
+      const key = event.key.toLowerCase()
+      const isMod = event.metaKey || event.ctrlKey
+
+      if (isMod && key === 'z') {
+        event.preventDefault()
+        if (event.shiftKey) redo()
+        else undo()
+        return
+      }
+
+      if (isMod && key === 'y') {
+        event.preventDefault()
+        redo()
+        return
+      }
+
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault()
+        removeSelected()
+        return
+      }
+
+      if (key === 'v') setTool('select')
+      if (key === 'h') setTool('pan')
+      if (key === 'r') setTool('rect')
+      if (key === 'o') setTool('ellipse')
+      if (key === 'l') setTool('line')
+      if (key === 'a') setTool('arrow')
+      if (key === 'p') setTool('draw')
+      if (key === 't') setTool('text')
+      if (key === '+') zoomByStep(1)
+      if (key === '-') zoomByStep(-1)
+    }
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code === 'Space') setSpacePan(false)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [redo, removeSelected, undo, zoomByStep])
 
   return (
-    <div className="app" ref={containerRef}>
-      <header className="toolbar">
-        <div className="tool-group">
-          {(['select', 'pan', 'rect', 'ellipse', 'line', 'arrow', 'draw', 'text'] as Tool[]).map((t) => (
-            <button key={t} className={tool === t ? 'active' : ''} onClick={() => setTool(t)}>
-              {t}
-            </button>
-          ))}
-        </div>
-        <div className="tool-group">
-          <label>Stroke <input type="color" value={stroke} onChange={(e) => setStroke(e.target.value)} /></label>
-          <label>Fill <input type="color" value={fill === '#00000000' ? '#ffffff' : fill} onChange={(e) => setFill(e.target.value)} /></label>
-          <label>Width <input type="range" min={1} max={12} value={strokeWidth} onChange={(e) => setStrokeWidth(Number(e.target.value))} /></label>
-          <button onClick={undo}>Undo</button>
-          <button onClick={redo}>Redo</button>
-          <button onClick={clearAll}>Clear</button>
-          <button onClick={exportJson}>Save JSON</button>
-          <label className="file-input">Load JSON<input type="file" accept="application/json" onChange={importJson} /></label>
-          <button onClick={exportPng}>Export PNG</button>
-          <button onClick={shareDrawing}>Share Link</button>
-        </div>
-      </header>
-
+    <div className="workspace-shell">
       <Stage
         ref={(node) => {
           stageRef.current = node
         }}
+        className="stage"
         width={viewport.width}
-        height={viewport.height - 62}
-        draggable={tool === 'pan'}
+        height={viewport.height}
+        draggable={activeTool === 'pan'}
         x={stagePos.x}
         y={stagePos.y}
         scaleX={stageScale}
         scaleY={stageScale}
-        onDragEnd={(e) => setStagePos({ x: e.target.x(), y: e.target.y() })}
-        onWheel={(e) => {
-          e.evt.preventDefault()
-          const oldScale = stageScale
+        onDragEnd={(event) => setStagePos({ x: event.target.x(), y: event.target.y() })}
+        onWheel={(event) => {
+          event.evt.preventDefault()
           const pointer = stageRef.current?.getPointerPosition()
           if (!pointer) return
-          const direction = e.evt.deltaY > 0 ? -1 : 1
-          const newScale = Math.max(0.2, Math.min(4, oldScale + direction * 0.1))
-          const mousePointTo = {
-            x: (pointer.x - stagePos.x) / oldScale,
-            y: (pointer.y - stagePos.y) / oldScale,
-          }
-          const newPos = {
-            x: pointer.x - mousePointTo.x * newScale,
-            y: pointer.y - mousePointTo.y * newScale,
-          }
-          setStageScale(newScale)
-          setStagePos(newPos)
+          const direction = event.evt.deltaY > 0 ? -1 : 1
+          setZoomAroundPoint(stageScale + direction * 0.08, pointer)
         }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
       >
         <Layer>
-          {shapes.map((s) => {
+          {shapes.map((shape) => {
             const common = {
-              key: s.id,
-              stroke: s.stroke,
-              strokeWidth: s.strokeWidth,
-              draggable: tool === 'select',
-              onClick: () => setSelectedId(s.id),
-              onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => {
-                const nx = e.target.x()
-                const ny = e.target.y()
-                updateShape(s.id, (shape) => {
-                  if (shape.type === 'rect' || shape.type === 'ellipse' || shape.type === 'text') {
-                    return { ...shape, x: nx, y: ny }
+              key: shape.id,
+              stroke: shape.stroke,
+              strokeWidth: shape.strokeWidth,
+              draggable: activeTool === 'select',
+              dash: selectedId === shape.id ? [6, 4] : [],
+              onClick: () => setSelectedId(shape.id),
+              onTap: () => setSelectedId(shape.id),
+              onDragStart: () => {
+                dragSnapshotRef.current = shapes
+              },
+              onDragEnd: (event: Konva.KonvaEventObject<DragEvent>) => {
+                const nodeX = event.target.x()
+                const nodeY = event.target.y()
+
+                updateShape(shape.id, (nextShape) => {
+                  if (nextShape.type === 'rect' || nextShape.type === 'ellipse' || nextShape.type === 'text') {
+                    return { ...nextShape, x: nodeX, y: nodeY }
                   }
-                  if (shape.type === 'line' || shape.type === 'arrow' || shape.type === 'draw') {
-                    const [sx, sy] = [shape.points[0], shape.points[1]]
-                    const dx = nx - sx
-                    const dy = ny - sy
-                    const moved = shape.points.map((p, i) => (i % 2 === 0 ? p + dx : p + dy))
-                    return { ...shape, points: moved }
+
+                  if (nextShape.type === 'line' || nextShape.type === 'arrow' || nextShape.type === 'draw') {
+                    const [startX, startY] = [nextShape.points[0], nextShape.points[1]]
+                    const dx = nodeX - startX
+                    const dy = nodeY - startY
+                    const translated = nextShape.points.map((point, index) =>
+                      index % 2 === 0 ? point + dx : point + dy,
+                    )
+                    return { ...nextShape, points: translated }
                   }
-                  return shape
+
+                  return nextShape
                 })
-                e.target.position({ x: 0, y: 0 })
+
+                if (dragSnapshotRef.current) {
+                  pushUndoState(dragSnapshotRef.current)
+                }
+
+                dragSnapshotRef.current = null
+                event.target.position({ x: 0, y: 0 })
               },
             }
 
-            if (s.type === 'rect') {
-              return <Rect {...common} x={s.x} y={s.y} width={s.width} height={s.height} fill={s.fill} dash={selectedId === s.id ? [6, 4] : []} />
+            if (shape.type === 'rect') {
+              return <Rect {...common} x={shape.x} y={shape.y} width={shape.width} height={shape.height} fill={shape.fill} />
             }
-            if (s.type === 'ellipse') {
-              return <Ellipse {...common} x={s.x} y={s.y} radiusX={s.radiusX} radiusY={s.radiusY} fill={s.fill} dash={selectedId === s.id ? [6, 4] : []} />
+
+            if (shape.type === 'ellipse') {
+              return (
+                <Ellipse
+                  {...common}
+                  x={shape.x}
+                  y={shape.y}
+                  radiusX={shape.radiusX}
+                  radiusY={shape.radiusY}
+                  fill={shape.fill}
+                />
+              )
             }
-            if (s.type === 'line') {
-              return <Line {...common} points={s.points} lineCap="round" lineJoin="round" dash={selectedId === s.id ? [6, 4] : []} />
+
+            if (shape.type === 'line') {
+              return <Line {...common} points={shape.points} lineCap="round" lineJoin="round" />
             }
-            if (s.type === 'arrow') {
-              return <Arrow {...common} points={s.points} pointerLength={12} pointerWidth={12} fill={s.stroke} dash={selectedId === s.id ? [6, 4] : []} />
+
+            if (shape.type === 'arrow') {
+              return (
+                <KonvaArrow
+                  {...common}
+                  points={shape.points}
+                  pointerLength={12}
+                  pointerWidth={12}
+                  fill={shape.stroke}
+                />
+              )
             }
-            if (s.type === 'draw') {
-              return <Line {...common} points={s.points} lineCap="round" lineJoin="round" tension={0.2} />
+
+            if (shape.type === 'draw') {
+              return <Line {...common} points={shape.points} lineCap="round" lineJoin="round" tension={0.2} />
             }
-            if (s.type === 'text') {
-              return <Text {...common} x={s.x} y={s.y} text={s.text} fontSize={s.fontSize} fill={s.stroke} />
+
+            if (shape.type === 'text') {
+              return (
+                <Text
+                  {...common}
+                  x={shape.x}
+                  y={shape.y}
+                  text={shape.text}
+                  fontSize={shape.fontSize}
+                  fill={shape.stroke}
+                />
+              )
             }
+
             return null
           })}
         </Layer>
       </Stage>
+
+      <header className="top-bar panel">
+        <div className="brand">
+          <div className="brand-dot" />
+          <div>
+            <strong>Notes Draw</strong>
+            <p>Excali-style canvas, custom build</p>
+          </div>
+        </div>
+
+        <div className="actions">
+          <button className="action-button" onClick={undo} title="Undo (Ctrl/Cmd + Z)">
+            <Undo2 size={16} /> Undo
+          </button>
+          <button className="action-button" onClick={redo} title="Redo (Ctrl/Cmd + Y)">
+            <Redo2 size={16} /> Redo
+          </button>
+          <button className="action-button" onClick={shareDrawing}>
+            <Share2 size={16} />
+            {shareState === 'publishing' && 'Publishing...'}
+            {shareState === 'copied' && 'Link copied'}
+            {shareState === 'failed' && 'Fallback copied'}
+            {shareState === 'idle' && 'Share'}
+          </button>
+          <button className="action-button" onClick={exportPng}>
+            <ImageDown size={16} /> PNG
+          </button>
+          <button className="action-button" onClick={exportJson}>
+            <Download size={16} /> JSON
+          </button>
+          <label className="action-button upload">
+            <Upload size={16} /> Import
+            <input type="file" accept="application/json" onChange={importJson} />
+          </label>
+          <button className="action-button danger" onClick={clearAll}>
+            <Trash2 size={16} /> Clear
+          </button>
+        </div>
+      </header>
+
+      <aside className="left-rail panel">
+        {TOOL_DEFINITIONS.map((entry) => {
+          const Icon = entry.icon
+          const isActive = activeTool === entry.id
+
+          return (
+            <button
+              key={entry.id}
+              className={`rail-button ${isActive ? 'active' : ''}`}
+              onClick={() => setTool(entry.id)}
+              title={`${entry.label} (${entry.shortcut})`}
+            >
+              <Icon size={18} />
+              <span>{entry.shortcut}</span>
+            </button>
+          )
+        })}
+      </aside>
+
+      <aside className="right-panel panel">
+        <h3>Properties</h3>
+        <p>{selectedShape ? `Selected: ${selectedShape.type}` : 'No shape selected'}</p>
+
+        <div className="control-row">
+          <label>Stroke</label>
+          <input
+            type="color"
+            value={stroke}
+            onChange={(event) => {
+              const next = event.target.value
+              setStroke(next)
+            }}
+          />
+        </div>
+
+        <div className="control-row">
+          <label>Fill</label>
+          <input
+            type="color"
+            value={fill === '#00000000' ? '#ffffff' : fill}
+            onChange={(event) => {
+              const next = event.target.value
+              setFill(next)
+            }}
+          />
+        </div>
+
+        <div className="control-column">
+          <label>Stroke width: {strokeWidth}px</label>
+          <input
+            type="range"
+            min={1}
+            max={12}
+            value={strokeWidth}
+            onChange={(event) => setStrokeWidth(Number(event.target.value))}
+          />
+        </div>
+
+        <div className="control-column">
+          <label>Zoom: {Math.round(stageScale * 100)}%</label>
+          <div className="zoom-actions">
+            <button className="action-button" onClick={() => zoomByStep(-1)}>
+              <ZoomOut size={15} />
+            </button>
+            <button className="action-button" onClick={() => zoomByStep(1)}>
+              <ZoomIn size={15} />
+            </button>
+          </div>
+        </div>
+
+        {selectedId && (
+          <button className="action-button danger full" onClick={removeSelected}>
+            <Trash2 size={15} /> Delete selected
+          </button>
+        )}
+      </aside>
+
+      <footer className="bottom-hud panel">
+        <span>Space = temporary pan</span>
+        <span>V/H/R/O/L/A/P/T = quick tools</span>
+        <span>{shapes.length} objects</span>
+      </footer>
     </div>
   )
 }
