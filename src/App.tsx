@@ -973,7 +973,7 @@ export default function App() {
           <span>{shapes.length} objects</span>
         </div>
         <div className="credits">
-          made with <strong>OpenClaw</strong> &lt;3 RJ
+          made with <strong>OpenClaw</strong> &lt;3 <strong>RJ</strong>
         </div>
       </footer>
     </div>
