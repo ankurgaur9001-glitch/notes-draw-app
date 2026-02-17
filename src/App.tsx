@@ -212,6 +212,7 @@ export default function App() {
   const [showGrid, setShowGrid] = useState(false)
   const [isDarkMode, setIsDarkMode] = useState(false)
   const [showAssets, setShowAssets] = useState(false)
+  const [touchStatus, setTouchStatus] = useState<string | null>(null)
 
   const stageRef = useRef<Konva.Stage | null>(null)
   const transformerRef = useRef<Konva.Transformer | null>(null)
@@ -797,7 +798,7 @@ export default function App() {
           value={editingText} onChange={(e) => setEditingText(e.target.value)} onBlur={finishEditing}
         />
       )}
-      <Stage ref={(node) => { stageRef.current = node }} className={`stage ${showGrid ? 'show-grid' : ''}`} width={viewport.width} height={viewport.height} draggable={activeTool === 'pan'} x={stagePos.x} y={stagePos.y} scaleX={stageScale} scaleY={stageScale} onDragEnd={(e) => setStagePos({ x: e.target.x(), y: e.target.y() })} onWheel={(e) => { e.evt.preventDefault(); const p = stageRef.current?.getPointerPosition(); if (p) setZoomAroundPoint(stageScale + (e.evt.deltaY > 0 ? -1 : 1) * 0.08, p); }} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} >
+      <Stage ref={(node) => { stageRef.current = node }} className={`stage ${showGrid ? 'show-grid' : ''}`} width={viewport.width} height={viewport.height} draggable={activeTool === 'pan'} x={stagePos.x} y={stagePos.y} scaleX={stageScale} scaleY={stageScale} onDragEnd={(e) => setStagePos({ x: e.target.x(), y: e.target.y() })} onWheel={(e) => { e.evt.preventDefault(); const p = stageRef.current?.getPointerPosition(); if (p) setZoomAroundPoint(stageScale + (e.evt.deltaY > 0 ? -1 : 1) * 0.08, p); }} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onTouchStart={() => setTouchStatus('Drawing...')} onTouchEnd={() => setTouchStatus(null)}>
         <Layer>
           {shapes.map((shape) => {
             const isSelected = selectedIds.includes(shape.id)
@@ -860,7 +861,7 @@ export default function App() {
         <div className="control-column"><label>Zoom: {Math.round(stageScale * 100)}%</label><div className="zoom-actions"><button className="action-button" onClick={() => zoomByStep(-1)}><ZoomOut size={15} /></button><button className="action-button" onClick={() => zoomByStep(1)}><ZoomIn size={15} /></button></div></div>
         {selectedIds.length > 0 && <button className="action-button danger full" onClick={removeSelected}><Trash2 size={15} /> Delete selected</button>}
       </aside>
-      <footer className="bottom-hud panel"><div className="hud-hints"><span>Space = temporary pan</span><span>V/H/R/O/L/A/P/T = quick tools</span><span>{shapes.length} objects</span></div><div className="credits">made with <strong>OpenClaw</strong> &lt;3 <strong>RJ</strong></div></footer>
+      <footer className="bottom-hud panel"><div className="hud-hints"><span>Space = temporary pan</span><span>V/H/R/O/L/A/P/T = quick tools</span><span>{shapes.length} objects</span>{touchStatus && <span className="touch-badge">{touchStatus}</span>}</div><div className="credits">made with <strong>OpenClaw</strong> &lt;3 <strong>RJ</strong></div></footer>
     </div>
   )
 }

@@ -39,7 +39,9 @@ Goal: Build a high-performance, collaborative drawing app that surpasses Excalid
 - [ ] **Mind-Map Mode**: Auto-layout for tree structures.
 
 
-## Phase 7 — Mobile & Ecosystem
-- [ ] **PWA Support**: Installable on desktop/mobile for native-feel.
-- [ ] **Touch Optimization**: Radial menus for tablet users.
+## Phase 7 — Mobile & Ecosystem (IN PROGRESS 🏗️)
+- [x] **PWA Support**: Installable on desktop/mobile (Vite PWA).
+- [x] **Touch Optimization**: Basic touch events and status indicators.
+- [ ] **Radial Menus**: Mobile-specific contextual controls.
 - [ ] **Obsidian/Notion Plugin**: Embed ClawCanvas directly into knowledge bases.
+

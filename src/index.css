@@ -466,6 +466,17 @@ button:hover,
   color: #4f46e5;
 }
 
+.touch-badge {
+  background: #fef3c7;
+  color: #92400e;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  border: 1px solid #fde68a;
+}
+
 .inline-text-editor {
   z-index: 100;
   background: transparent;
