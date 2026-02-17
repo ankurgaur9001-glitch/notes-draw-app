@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { Layer, Stage, Text, Shape as KonvaShape } from 'react-konva'
 import type Konva from 'konva'
 import rough from 'roughjs'
@@ -83,8 +83,10 @@ export default function App() {
   const [roughness, setRoughness] = useState(1)
   const [fillStyle, setFillStyle] = useState<Shape['fillStyle']>('hachure')
   const [shapes, setShapes] = useState<Shape[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [isDrawing, setIsDrawing] = useState(false)
+  const [isSelecting, setIsSelecting] = useState(false)
+  const [selectionRect, setSelectionRect] = useState<{ x: number, y: number, width: number, height: number } | null>(null)
   const [history, setHistory] = useState<Shape[][]>([])
   const [redoStack, setRedoStack] = useState<Shape[][]>([])
   const [stageScale, setStageScale] = useState(1)
@@ -98,7 +100,6 @@ export default function App() {
   const dragSnapshotRef = useRef<Shape[] | null>(null)
 
   const activeTool = spacePan ? 'pan' : tool
-  const selectedShape = useMemo(() => shapes.find((shape) => shape.id === selectedId) ?? null, [selectedId, shapes])
 
   useEffect(() => {
     const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight })
@@ -205,8 +206,20 @@ export default function App() {
 
     if (activeTool === 'select') {
       const pointer = stage.getPointerPosition()
-      const clickedOnEmpty = !pointer || stage.getIntersection(pointer) == null
-      if (clickedOnEmpty) setSelectedId(null)
+      if (!pointer) return
+      const intersection = stage.getIntersection(pointer)
+      
+      if (!intersection) {
+        setSelectedIds([])
+        setIsSelecting(true)
+        setSelectionRect({ x: p.x, y: p.y, width: 0, height: 0 })
+      } else {
+        const shapeNode = intersection.findAncestor('.konva-shape') || intersection
+        const id = shapeNode.id()
+        if (id) {
+          setSelectedIds(prev => prev.includes(id) ? prev : [id])
+        }
+      }
       return
     }
 
@@ -268,13 +281,17 @@ export default function App() {
   }
 
   const handleMouseMove = () => {
-    if (!isDrawing || !draftRef.current) return
-
     const stage = stageRef.current
     if (!stage) return
-
     const p = pointerToCanvas(stage)
     if (!p) return
+
+    if (isSelecting && selectionRect) {
+      setSelectionRect(prev => prev ? ({ ...prev, width: p.x - prev.x, height: p.y - prev.y }) : null)
+      return
+    }
+
+    if (!isDrawing || !draftRef.current) return
 
     setShapes((prev) => {
       const next = [...prev]
@@ -309,6 +326,31 @@ export default function App() {
   }
 
   const handleMouseUp = () => {
+    if (isSelecting && selectionRect) {
+      const x1 = Math.min(selectionRect.x, selectionRect.x + selectionRect.width)
+      const x2 = Math.max(selectionRect.x, selectionRect.x + selectionRect.width)
+      const y1 = Math.min(selectionRect.y, selectionRect.y + selectionRect.height)
+      const y2 = Math.max(selectionRect.y, selectionRect.y + selectionRect.height)
+
+      const boxSelected = shapes.filter(s => {
+        if (s.type === 'rect' || s.type === 'text') {
+          return s.x >= x1 && s.x <= x2 && s.y >= y1 && s.y <= y2
+        }
+        if (s.type === 'ellipse') {
+          return s.x >= x1 && s.x <= x2 && s.y >= y1 && s.y <= y2
+        }
+        if (s.type === 'line' || s.type === 'arrow' || s.type === 'draw') {
+          return s.points.some((p, i) => i % 2 === 0 ? (p >= x1 && p <= x2) : (p >= y1 && p <= y2))
+        }
+        return false
+      }).map(s => s.id)
+
+      setSelectedIds(boxSelected)
+      setIsSelecting(false)
+      setSelectionRect(null)
+      return
+    }
+
     if (!isDrawing) return
 
     setIsDrawing(false)
@@ -341,10 +383,6 @@ export default function App() {
     draftRef.current = null
   }
 
-  const updateShape = (id: string, updater: (shape: Shape) => Shape) => {
-    setShapes((prev) => prev.map((shape) => (shape.id === id ? updater(shape) : shape)))
-  }
-
   const undo = useCallback(() => {
     if (!history.length) return
 
@@ -352,7 +390,7 @@ export default function App() {
     setRedoStack((prev) => [shapes, ...prev].slice(0, SNAPSHOT_LIMIT))
     setHistory((prev) => prev.slice(0, -1))
     setShapes(previousScene)
-    setSelectedId(null)
+    setSelectedIds([])
   }, [history, shapes])
 
   const redo = useCallback(() => {
@@ -362,14 +400,14 @@ export default function App() {
     setHistory((prev) => [...prev.slice(-SNAPSHOT_LIMIT + 1), shapes])
     setRedoStack((prev) => prev.slice(1))
     setShapes(nextScene)
-    setSelectedId(null)
+    setSelectedIds([])
   }, [redoStack, shapes])
 
   const removeSelected = useCallback(() => {
-    if (!selectedId) return
-    commitScene(shapes.filter((shape) => shape.id !== selectedId))
-    setSelectedId(null)
-  }, [selectedId, shapes])
+    if (selectedIds.length === 0) return
+    commitScene(shapes.filter((shape) => !selectedIds.includes(shape.id)))
+    setSelectedIds([])
+  }, [selectedIds, shapes])
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(shapes, null, 2)], { type: 'application/json' })
@@ -390,7 +428,7 @@ export default function App() {
       const parsed = JSON.parse(content) as Shape[]
       if (!Array.isArray(parsed)) return
       commitScene(parsed)
-      setSelectedId(null)
+      setSelectedIds([])
     } catch (error) {
       console.error('Failed to import JSON', error)
       alert('Invalid JSON file')
@@ -466,7 +504,7 @@ export default function App() {
   const clearAll = () => {
     if (!shapes.length) return
     commitScene([])
-    setSelectedId(null)
+    setSelectedIds([])
   }
 
   useEffect(() => {
@@ -555,33 +593,39 @@ export default function App() {
       >
         <Layer>
           {shapes.map((shape) => {
-            const isSelected = selectedId === shape.id
+            const isSelected = selectedIds.includes(shape.id)
             const common = {
               key: shape.id,
-              draggable: activeTool === 'select',
-              onClick: () => setSelectedId(shape.id),
-              onTap: () => setSelectedId(shape.id),
+              draggable: activeTool === 'select' && isSelected,
+              onClick: (e: any) => {
+                if (activeTool !== 'select') return;
+                e.cancelBubble = true;
+                if (e.evt.shiftKey) {
+                  setSelectedIds(prev => prev.includes(shape.id) ? prev.filter(id => id !== shape.id) : [...prev, shape.id])
+                } else {
+                  setSelectedIds([shape.id])
+                }
+              },
               onDragStart: () => {
                 dragSnapshotRef.current = shapes
               },
               onDragEnd: (event: Konva.KonvaEventObject<DragEvent>) => {
+                if (event.target !== event.currentTarget) return;
                 const nodeX = event.target.x()
                 const nodeY = event.target.y()
 
-                updateShape(shape.id, (nextShape) => {
-                  if (nextShape.type === 'rect' || nextShape.type === 'ellipse' || nextShape.type === 'text') {
-                    return { ...nextShape, x: nodeX + nextShape.x, y: nodeY + nextShape.y }
+                setShapes(prev => prev.map(s => {
+                  if (!selectedIds.includes(s.id)) return s;
+                  
+                  if (s.type === 'rect' || s.type === 'ellipse' || s.type === 'text') {
+                    return { ...s, x: s.x + nodeX, y: s.y + nodeY }
                   }
-
-                  if (nextShape.type === 'line' || nextShape.type === 'arrow' || nextShape.type === 'draw') {
-                    const translated = nextShape.points.map((point, index) =>
-                      index % 2 === 0 ? point + nodeX : point + nodeY,
-                    )
-                    return { ...nextShape, points: translated }
+                  if (s.type === 'line' || s.type === 'arrow' || s.type === 'draw') {
+                    const translated = s.points.map((p, i) => i % 2 === 0 ? p + nodeX : p + nodeY)
+                    return { ...s, points: translated }
                   }
-
-                  return nextShape
-                })
+                  return s
+                }))
 
                 if (dragSnapshotRef.current) {
                   pushUndoState(dragSnapshotRef.current)
@@ -591,6 +635,8 @@ export default function App() {
                 event.target.position({ x: 0, y: 0 })
               },
               sceneFunc: (context: any, shapeNode: any) => {
+                shapeNode.id(shape.id);
+                shapeNode.name('konva-shape');
                 const roughCanvas = rough.canvas(context.canvas._canvas)
                 const options = {
                   stroke: shape.stroke,
@@ -659,14 +705,36 @@ export default function App() {
                   text={shape.text}
                   fontSize={shape.fontSize}
                   fill={shape.stroke}
-                  draggable={activeTool === 'select'}
-                  onClick={() => setSelectedId(shape.id)}
+                  draggable={activeTool === 'select' && isSelected}
+                  onClick={(e: any) => {
+                    if (activeTool !== 'select') return;
+                    e.cancelBubble = true;
+                    if (e.evt.shiftKey) {
+                      setSelectedIds(prev => prev.includes(shape.id) ? prev.filter(id => id !== shape.id) : [...prev, shape.id])
+                    } else {
+                      setSelectedIds([shape.id])
+                    }
+                  }}
                 />
               )
             }
 
             return <KonvaShape {...common} />
           })}
+          {selectionRect && (
+            <KonvaShape
+              sceneFunc={(context) => {
+                const roughCanvas = rough.canvas(context.canvas._canvas)
+                roughCanvas.draw(generator.rectangle(selectionRect.x, selectionRect.y, selectionRect.width, selectionRect.height, {
+                  stroke: '#4f46e5',
+                  strokeWidth: 1,
+                  fill: 'rgba(79, 70, 229, 0.1)',
+                  fillStyle: 'solid',
+                  roughness: 0,
+                }))
+              }}
+            />
+          )}
         </Layer>
       </Stage>
 
@@ -730,7 +798,7 @@ export default function App() {
 
       <aside className="right-panel panel">
         <h3>Properties</h3>
-        <p>{selectedShape ? `Selected: ${selectedShape.type}` : 'No shape selected'}</p>
+        <p>{selectedIds.length > 0 ? `Selected: ${selectedIds.length} objects` : 'No shape selected'}</p>
 
         <div className="control-row">
           <label>Stroke</label>
@@ -740,7 +808,9 @@ export default function App() {
             onChange={(event) => {
               const next = event.target.value
               setStroke(next)
-              if (selectedId) updateShape(selectedId, s => ({ ...s, stroke: next }))
+              if (selectedIds.length > 0) {
+                setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, stroke: next } : s))
+              }
             }}
           />
         </div>
@@ -753,7 +823,9 @@ export default function App() {
             onChange={(event) => {
               const next = event.target.value
               setFill(next)
-              if (selectedId) updateShape(selectedId, s => ({ ...s, fill: next }))
+              if (selectedIds.length > 0) {
+                setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, fill: next } : s))
+              }
             }}
           />
         </div>
@@ -768,7 +840,9 @@ export default function App() {
             onChange={(event) => {
               const next = Number(event.target.value)
               setStrokeWidth(next)
-              if (selectedId) updateShape(selectedId, s => ({ ...s, strokeWidth: next }))
+              if (selectedIds.length > 0) {
+                setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, strokeWidth: next } : s))
+              }
             }}
           />
         </div>
@@ -784,7 +858,9 @@ export default function App() {
             onChange={(event) => {
               const next = Number(event.target.value)
               setRoughness(next)
-              if (selectedId) updateShape(selectedId, s => ({ ...s, roughness: next }))
+              if (selectedIds.length > 0) {
+                setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, roughness: next } : s))
+              }
             }}
           />
         </div>
@@ -796,7 +872,9 @@ export default function App() {
             onChange={(e) => {
               const next = e.target.value as Shape['fillStyle']
               setFillStyle(next)
-              if (selectedId) updateShape(selectedId, s => ({ ...s, fillStyle: next }))
+              if (selectedIds.length > 0) {
+                setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, fillStyle: next } : s))
+              }
             }}
             className="action-button full"
           >
@@ -821,7 +899,7 @@ export default function App() {
           </div>
         </div>
 
-        {selectedId && (
+        {selectedIds.length > 0 && (
           <button className="action-button danger full" onClick={removeSelected}>
             <Trash2 size={15} /> Delete selected
           </button>
