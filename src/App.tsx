@@ -32,6 +32,7 @@ type ShapeBase = {
   fill: string
   strokeWidth: number
   roughness: number
+  fillStyle: 'hachure' | 'solid' | 'zigzag' | 'cross-hatch' | 'dots' | 'sunburst'
 }
 
 type RectShape = ShapeBase & { type: 'rect'; x: number; y: number; width: number; height: number }
@@ -80,6 +81,7 @@ export default function App() {
   const [fill, setFill] = useState('#00000000')
   const [strokeWidth, setStrokeWidth] = useState(2)
   const [roughness, setRoughness] = useState(1)
+  const [fillStyle, setFillStyle] = useState<Shape['fillStyle']>('hachure')
   const [shapes, setShapes] = useState<Shape[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [isDrawing, setIsDrawing] = useState(false)
@@ -225,6 +227,7 @@ export default function App() {
           fill: '#00000000',
           strokeWidth,
           roughness,
+          fillStyle,
         },
       ]
 
@@ -240,23 +243,23 @@ export default function App() {
     const id = uid()
 
     if (activeTool === 'rect') {
-      draftRef.current = { id, type: 'rect', x: p.x, y: p.y, width: 1, height: 1, stroke, fill, strokeWidth, roughness }
+      draftRef.current = { id, type: 'rect', x: p.x, y: p.y, width: 1, height: 1, stroke, fill, strokeWidth, roughness, fillStyle }
     }
 
     if (activeTool === 'ellipse') {
-      draftRef.current = { id, type: 'ellipse', x: p.x, y: p.y, radiusX: 1, radiusY: 1, stroke, fill, strokeWidth, roughness }
+      draftRef.current = { id, type: 'ellipse', x: p.x, y: p.y, radiusX: 1, radiusY: 1, stroke, fill, strokeWidth, roughness, fillStyle }
     }
 
     if (activeTool === 'line') {
-      draftRef.current = { id, type: 'line', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth, roughness }
+      draftRef.current = { id, type: 'line', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth, roughness, fillStyle }
     }
 
     if (activeTool === 'arrow') {
-      draftRef.current = { id, type: 'arrow', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth, roughness }
+      draftRef.current = { id, type: 'arrow', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth, roughness, fillStyle }
     }
 
     if (activeTool === 'draw') {
-      draftRef.current = { id, type: 'draw', points: [p.x, p.y], stroke, fill: '#00000000', strokeWidth, roughness }
+      draftRef.current = { id, type: 'draw', points: [p.x, p.y], stroke, fill: '#00000000', strokeWidth, roughness, fillStyle }
     }
 
     if (draftRef.current) {
@@ -594,7 +597,7 @@ export default function App() {
                   strokeWidth: shape.strokeWidth,
                   roughness: shape.roughness,
                   fill: shape.fill === '#00000000' ? undefined : shape.fill,
-                  fillStyle: 'hachure' as const,
+                  fillStyle: shape.fillStyle,
                 }
 
                 // Apply Konva transformations
@@ -606,13 +609,29 @@ export default function App() {
                 } else if (shape.type === 'ellipse') {
                   const drawing = generator.ellipse(shape.x, shape.y, shape.radiusX * 2, shape.radiusY * 2, options)
                   roughCanvas.draw(drawing)
-                } else if (shape.type === 'line') {
+                } else if (shape.type === 'line' || shape.type === 'arrow') {
                   const drawing = generator.line(shape.points[0], shape.points[1], shape.points[2], shape.points[3], options)
                   roughCanvas.draw(drawing)
-                } else if (shape.type === 'arrow') {
-                  const drawing = generator.line(shape.points[0], shape.points[1], shape.points[2], shape.points[3], options)
-                  roughCanvas.draw(drawing)
-                  // Simple arrow head logic could be added here
+                  
+                  if (shape.type === 'arrow') {
+                    // Calculate arrow head
+                    const x1 = shape.points[0]
+                    const y1 = shape.points[1]
+                    const x2 = shape.points[2]
+                    const y2 = shape.points[3]
+                    const dx = x2 - x1
+                    const dy = y2 - y1
+                    const angle = Math.atan2(dy, dx)
+                    const headLength = 15
+                    
+                    const head1X = x2 - headLength * Math.cos(angle - Math.PI / 6)
+                    const head1Y = y2 - headLength * Math.sin(angle - Math.PI / 6)
+                    const head2X = x2 - headLength * Math.cos(angle + Math.PI / 6)
+                    const head2Y = y2 - headLength * Math.sin(angle + Math.PI / 6)
+                    
+                    roughCanvas.draw(generator.line(x2, y2, head1X, head1Y, options))
+                    roughCanvas.draw(generator.line(x2, y2, head2X, head2Y, options))
+                  }
                 } else if (shape.type === 'draw') {
                   const pts: [number, number][] = []
                   for (let i = 0; i < shape.points.length; i += 2) {
@@ -768,6 +787,26 @@ export default function App() {
               if (selectedId) updateShape(selectedId, s => ({ ...s, roughness: next }))
             }}
           />
+        </div>
+
+        <div className="control-column">
+          <label>Fill Style</label>
+          <select 
+            value={fillStyle} 
+            onChange={(e) => {
+              const next = e.target.value as Shape['fillStyle']
+              setFillStyle(next)
+              if (selectedId) updateShape(selectedId, s => ({ ...s, fillStyle: next }))
+            }}
+            className="action-button full"
+          >
+            <option value="hachure">Hachure</option>
+            <option value="solid">Solid</option>
+            <option value="zigzag">Zigzag</option>
+            <option value="cross-hatch">Cross-hatch</option>
+            <option value="dots">Dots</option>
+            <option value="sunburst">Sunburst</option>
+          </select>
         </div>
 
         <div className="control-column">
