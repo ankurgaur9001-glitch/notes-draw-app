@@ -9,6 +9,7 @@ import { IndexeddbPersistence } from 'y-indexeddb'
 import {
   ArrowRight,
   Circle as CircleIcon,
+  Command,
   Download,
   FileCode,
   Hand,
@@ -196,6 +197,8 @@ export default function App() {
   const [shareState, setShareState] = useState<'idle' | 'publishing' | 'copied' | 'failed'>('idle')
   const [roomId, setRoomId] = useState<string | null>(null)
   const [peers, setPeers] = useState<Map<number, { x: number, y: number, name: string }>>(new Map())
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
+  const [commandSearch, setCommandSearch] = useState('')
 
   const stageRef = useRef<Konva.Stage | null>(null)
   const transformerRef = useRef<Konva.Transformer | null>(null)
@@ -628,6 +631,10 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (isCommandPaletteOpen) {
+        if (event.key === 'Escape') setIsCommandPaletteOpen(false)
+        return
+      }
       if (editingId) {
         if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); finishEditing(); }
         if (event.key === 'Escape') finishEditing()
@@ -639,6 +646,13 @@ export default function App() {
       const key = event.key.toLowerCase(), isMod = event.metaKey || event.ctrlKey
       if (isMod && key === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); return; }
       if (isMod && key === 'y') { event.preventDefault(); redo(); return; }
+      if (isMod && key === 'k') {
+        event.preventDefault()
+        setIsCommandPaletteOpen(prev => !prev)
+        setCommandSearch('')
+        return
+      }
+
       if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); removeSelected(); return; }
       if (key === 'v') setTool('select')
       if (key === 'h') setTool('pan')
@@ -666,8 +680,75 @@ export default function App() {
     return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('paste', onPaste); }
   }, [redo, removeSelected, undo, zoomByStep, activeTool, shapes, stroke, strokeWidth, roughness, fillStyle, editingId, finishEditing])
 
+  const centerScene = () => {
+    if (shapes.length === 0) {
+      setStagePos({ x: 0, y: 0 })
+      setStageScale(1)
+      return
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    shapes.forEach(s => {
+      if (s.type === 'rect' || s.type === 'text') {
+        minX = Math.min(minX, s.x); minY = Math.min(minY, s.y)
+        maxX = Math.max(maxX, s.x + (s.type === 'rect' ? s.width : 100))
+        maxY = Math.max(maxY, s.y + (s.type === 'rect' ? s.height : 24))
+      } else if (s.type === 'ellipse') {
+        minX = Math.min(minX, s.x - s.radiusX); minY = Math.min(minY, s.y - s.radiusY)
+        maxX = Math.max(maxX, s.x + s.radiusX); maxY = Math.max(maxY, s.y + s.radiusY)
+      } else {
+        for (let i = 0; i < s.points.length; i += 2) {
+          minX = Math.min(minX, s.points[i]); minY = Math.min(minY, s.points[i+1])
+          maxX = Math.max(maxX, s.points[i]); maxY = Math.max(maxY, s.points[i+1])
+        }
+      }
+    })
+    const centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2
+    setStagePos({ x: viewport.width / 2 - centerX * stageScale, y: viewport.height / 2 - centerY * stageScale })
+  }
+
+  const COMMANDS = [
+    { id: 'center', label: 'Center Scene', icon: MousePointer2, action: () => centerScene() },
+    { id: 'clear', label: 'Clear Canvas', icon: Trash2, action: () => { if (confirm('Clear everything?')) commitScene([]); } },
+    { id: 'export_json', label: 'Export JSON', icon: Download, action: () => exportJson() },
+    { id: 'export_svg', label: 'Export SVG', icon: FileCode, action: () => exportSvg() },
+    { id: 'export_png', label: 'Export PNG', icon: ImageDown, action: () => exportPng() },
+    { id: 'collab', label: 'Start Collaboration', icon: Users, action: () => joinOrCreateRoom() },
+  ]
+
+  const filteredCommands = COMMANDS.filter(c => c.label.toLowerCase().includes(commandSearch.toLowerCase()))
+
   return (
     <div className="workspace-shell">
+      {isCommandPaletteOpen && (
+        <div className="command-palette-overlay" onClick={() => setIsCommandPaletteOpen(false)}>
+          <div className="command-palette" onClick={e => e.stopPropagation()}>
+            <div className="command-search-wrapper">
+              <Command size={18} />
+              <input 
+                autoFocus 
+                placeholder="Type a command..." 
+                value={commandSearch} 
+                onChange={e => setCommandSearch(e.target.value)} 
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && filteredCommands.length > 0) {
+                    filteredCommands[0].action()
+                    setIsCommandPaletteOpen(false)
+                  }
+                }}
+              />
+            </div>
+            <div className="command-list">
+              {filteredCommands.map(c => (
+                <div key={c.id} className="command-item" onClick={() => { c.action(); setIsCommandPaletteOpen(false); }}>
+                  <c.icon size={16} />
+                  <span>{c.label}</span>
+                </div>
+              ))}
+              {filteredCommands.length === 0 && <div className="command-empty">No commands found</div>}
+            </div>
+          </div>
+        </div>
+      )}
       {editingId && (
         <textarea autoFocus className="inline-text-editor"
           style={{ position: 'absolute', top: ((shapes.find(s => s.id === editingId) as TextShape)?.y || 0) * stageScale + stagePos.y, left: ((shapes.find(s => s.id === editingId) as TextShape)?.x || 0) * stageScale + stagePos.x, fontSize: ((shapes.find(s => s.id === editingId) as TextShape)?.fontSize || 24) * stageScale, color: ((shapes.find(s => s.id === editingId) as TextShape)?.stroke || '#000'), transform: `rotate(${(shapes.find(s => s.id === editingId) as TextShape)?.angle || 0}deg)`, transformOrigin: 'top left' }}

@@ -28,7 +28,8 @@ Goal: Build a high-performance, collaborative drawing app that surpasses Excalid
 - [ ] **Smart Shape Recognition**: Convert rough pencil scribbles into perfect shapes (Circles, Squares, Arrows) automatically.
 - [ ] **AI "Scribble-to-Code"**: A button to "Explain/Generate" where an LLM looks at the canvas and generates React/Tailwind code for the diagram.
 - [ ] **Magic Connectivity**: Arrows that "stick" to shapes. Move the box, and the arrow stays connected.
-- [ ] **Command Palette (Ctrl+K)**: Quick actions to "Center Scene", "Clear All", or "Apply Dark Mode" via text.
+- [x] **Command Palette (Ctrl+K)**: Quick actions to "Center Scene", "Clear All", or "Apply Dark Mode" via text.
+
 
 ## Phase 6 — Professional Polish
 - [ ] **Smart Snapping**: Visual guides for alignment and equal spacing.
