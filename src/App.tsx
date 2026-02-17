@@ -907,9 +907,14 @@ export default function App() {
       </aside>
 
       <footer className="bottom-hud panel">
-        <span>Space = temporary pan</span>
-        <span>V/H/R/O/L/A/P/T = quick tools</span>
-        <span>{shapes.length} objects</span>
+        <div className="hud-hints">
+          <span>Space = temporary pan</span>
+          <span>V/H/R/O/L/A/P/T = quick tools</span>
+          <span>{shapes.length} objects</span>
+        </div>
+        <div className="credits">
+          made with <strong>OpenClaw</strong> &lt;3 RJ
+        </div>
       </footer>
     </div>
   )
