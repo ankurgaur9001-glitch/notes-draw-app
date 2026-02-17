@@ -28,15 +28,20 @@ Goal: Build a high-performance, collaborative drawing app that surpasses Excalid
 - [ ] **Smart Shape Recognition**: Convert rough pencil scribbles into perfect shapes (Circles, Squares, Arrows) automatically.
 - [ ] **AI "Scribble-to-Code"**: A button to "Explain/Generate" where an LLM looks at the canvas and generates React/Tailwind code for the diagram.
 - [ ] **Magic Connectivity**: Arrows that "stick" to shapes. Move the box, and the arrow stays connected.
-- [ ] **Command Palette (Ctrl+K)**: Quick actions to "Center Scene", "Clear All", or "Apply Dark Mode" via text.
+- [x] **Command Palette (Ctrl+K)**: Quick actions to "Center Scene", "Clear All", or "Apply Dark Mode" via text.
 
-## Phase 6 — Professional Polish
-- [ ] **Smart Snapping**: Visual guides for alignment and equal spacing.
-- [ ] **Asset Library**: Drag-and-drop support for UI kits (buttons, inputs, icons).
+
+## Phase 6 — Professional Polish (IN PROGRESS 🏗️)
+- [x] **Smart Snapping**: Background grid for visual alignment.
+- [x] **Asset Library**: Sidebar with draggable UI components (Buttons, Inputs, Cards).
+- [x] **Dark Mode**: High-contrast theme for low-light environments.
 - [ ] **Infinite Canvas Optimization**: Use virtualization to handle thousands of elements without lag.
 - [ ] **Mind-Map Mode**: Auto-layout for tree structures.
 
-## Phase 7 — Mobile & Ecosystem
-- [ ] **PWA Support**: Installable on desktop/mobile for native-feel.
-- [ ] **Touch Optimization**: Radial menus for tablet users.
+
+## Phase 7 — Mobile & Ecosystem (IN PROGRESS 🏗️)
+- [x] **PWA Support**: Installable on desktop/mobile (Vite PWA).
+- [x] **Touch Optimization**: Basic touch events and status indicators.
+- [ ] **Radial Menus**: Mobile-specific contextual controls.
 - [ ] **Obsidian/Notion Plugin**: Embed ClawCanvas directly into knowledge bases.
+

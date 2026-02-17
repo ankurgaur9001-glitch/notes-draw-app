@@ -9,16 +9,21 @@ import { IndexeddbPersistence } from 'y-indexeddb'
 import {
   ArrowRight,
   Circle as CircleIcon,
+  Command,
   Download,
   FileCode,
+  Grid3X3,
   Hand,
   ImageDown,
+  Layout,
   Minus,
+  Moon,
   MousePointer2,
   Pencil,
   Redo2,
   Share2,
   Square,
+  Sun,
   Trash2,
   Type,
   Undo2,
@@ -52,6 +57,12 @@ type Shape = RectShape | EllipseShape | LineShape | DrawShape | TextShape
 
 const CURRENT_VERSION = 3
 const LOCAL_SCENE_KEY = 'notes-draw-app.scene.v3'
+
+const DEFAULT_ASSETS = [
+  { id: 'btn', type: 'rect', width: 100, height: 40, stroke: '#4f46e5', fill: '#4f46e5', strokeWidth: 2, roughness: 1, fillStyle: 'solid', angle: 0, label: 'Button' },
+  { id: 'inp', type: 'rect', width: 180, height: 40, stroke: '#d1d5db', fill: '#ffffff', strokeWidth: 2, roughness: 0.5, fillStyle: 'solid', angle: 0, label: 'Input' },
+  { id: 'card', type: 'rect', width: 200, height: 120, stroke: '#e5e7eb', fill: '#ffffff', strokeWidth: 1, roughness: 0, fillStyle: 'solid', angle: 0, label: 'Card' },
+]
 
 const ShapeSchema = z.discriminatedUnion('type', [
   z.object({
@@ -196,6 +207,12 @@ export default function App() {
   const [shareState, setShareState] = useState<'idle' | 'publishing' | 'copied' | 'failed'>('idle')
   const [roomId, setRoomId] = useState<string | null>(null)
   const [peers, setPeers] = useState<Map<number, { x: number, y: number, name: string }>>(new Map())
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
+  const [commandSearch, setCommandSearch] = useState('')
+  const [showGrid, setShowGrid] = useState(false)
+  const [isDarkMode, setIsDarkMode] = useState(false)
+  const [showAssets, setShowAssets] = useState(false)
+  const [touchStatus, setTouchStatus] = useState<string | null>(null)
 
   const stageRef = useRef<Konva.Stage | null>(null)
   const transformerRef = useRef<Konva.Transformer | null>(null)
@@ -628,6 +645,10 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (isCommandPaletteOpen) {
+        if (event.key === 'Escape') setIsCommandPaletteOpen(false)
+        return
+      }
       if (editingId) {
         if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); finishEditing(); }
         if (event.key === 'Escape') finishEditing()
@@ -639,6 +660,13 @@ export default function App() {
       const key = event.key.toLowerCase(), isMod = event.metaKey || event.ctrlKey
       if (isMod && key === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); return; }
       if (isMod && key === 'y') { event.preventDefault(); redo(); return; }
+      if (isMod && key === 'k') {
+        event.preventDefault()
+        setIsCommandPaletteOpen(prev => !prev)
+        setCommandSearch('')
+        return
+      }
+
       if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); removeSelected(); return; }
       if (key === 'v') setTool('select')
       if (key === 'h') setTool('pan')
@@ -664,17 +692,113 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown); window.addEventListener('keyup', onKeyUp); window.addEventListener('paste', onPaste)
     return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('paste', onPaste); }
-  }, [redo, removeSelected, undo, zoomByStep, activeTool, shapes, stroke, strokeWidth, roughness, fillStyle, editingId, finishEditing])
+  }, [redo, removeSelected, undo, zoomByStep, activeTool, shapes, stroke, strokeWidth, roughness, fillStyle, editingId, finishEditing, isCommandPaletteOpen])
+
+  const centerScene = () => {
+    if (shapes.length === 0) {
+      setStagePos({ x: 0, y: 0 })
+      setStageScale(1)
+      return
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    shapes.forEach(s => {
+      if (s.type === 'rect' || s.type === 'text') {
+        minX = Math.min(minX, s.x); minY = Math.min(minY, s.y)
+        maxX = Math.max(maxX, s.x + (s.type === 'rect' ? s.width : 100))
+        maxY = Math.max(maxY, s.y + (s.type === 'rect' ? s.height : 24))
+      } else if (s.type === 'ellipse') {
+        minX = Math.min(minX, s.x - s.radiusX); minY = Math.min(minY, s.y - s.radiusY)
+        maxX = Math.max(maxX, s.x + s.radiusX); maxY = Math.max(maxY, s.y + s.radiusY)
+      } else {
+        for (let i = 0; i < s.points.length; i += 2) {
+          minX = Math.min(minX, s.points[i]); minY = Math.min(minY, s.points[i+1])
+          maxX = Math.max(maxX, s.points[i]); maxY = Math.max(maxY, s.points[i+1])
+        }
+      }
+    })
+    const centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2
+    setStagePos({ x: viewport.width / 2 - centerX * stageScale, y: viewport.height / 2 - centerY * stageScale })
+  }
+
+  const COMMANDS = [
+    { id: 'center', label: 'Center Scene', icon: MousePointer2, action: () => centerScene() },
+    { id: 'clear', label: 'Clear Canvas', icon: Trash2, action: () => { if (confirm('Clear everything?')) commitScene([]); } },
+    { id: 'export_json', label: 'Export JSON', icon: Download, action: () => exportJson() },
+    { id: 'export_svg', label: 'Export SVG', icon: FileCode, action: () => exportSvg() },
+    { id: 'export_png', label: 'Export PNG', icon: ImageDown, action: () => exportPng() },
+    { id: 'toggle_grid', label: 'Toggle Grid', icon: Grid3X3, action: () => setShowGrid(prev => !prev) },
+    { id: 'toggle_dark', label: 'Toggle Dark Mode', icon: isDarkMode ? Sun : Moon, action: () => setIsDarkMode(prev => !prev) },
+    { id: 'toggle_assets', label: 'Toggle Asset Library', icon: Layout, action: () => setShowAssets(prev => !prev) },
+    { id: 'collab', label: 'Start Collaboration', icon: Users, action: () => joinOrCreateRoom() },
+  ]
+
+  const filteredCommands = COMMANDS.filter(c => c.label.toLowerCase().includes(commandSearch.toLowerCase()))
 
   return (
-    <div className="workspace-shell">
+    <div className={`workspace-shell ${isDarkMode ? 'dark-theme' : ''}`}>
+      {showAssets && (
+        <aside className="assets-sidebar panel">
+          <div className="sidebar-header">
+            <h3>Asset Library</h3>
+            <button className="icon-btn" onClick={() => setShowAssets(false)}><Trash2 size={14} /></button>
+          </div>
+          <div className="assets-grid">
+            {DEFAULT_ASSETS.map(asset => (
+              <div 
+                key={asset.id} 
+                className="asset-item"
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData('claw_asset', JSON.stringify(asset))}
+                onClick={() => {
+                  const id = uid()
+                  const shape: any = { ...asset, id, x: 100, y: 100, label: undefined }
+                  commitScene([...shapes, shape])
+                }}
+              >
+                <div className="asset-preview" style={{ background: asset.fill === '#00000000' ? '#eee' : asset.fill, borderColor: asset.stroke }}></div>
+                <span>{asset.label}</span>
+              </div>
+            ))}
+          </div>
+        </aside>
+      )}
+      {isCommandPaletteOpen && (
+        <div className="command-palette-overlay" onClick={() => setIsCommandPaletteOpen(false)}>
+          <div className="command-palette" onClick={e => e.stopPropagation()}>
+            <div className="command-search-wrapper">
+              <Command size={18} />
+              <input 
+                autoFocus 
+                placeholder="Type a command..." 
+                value={commandSearch} 
+                onChange={e => setCommandSearch(e.target.value)} 
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && filteredCommands.length > 0) {
+                    filteredCommands[0].action()
+                    setIsCommandPaletteOpen(false)
+                  }
+                }}
+              />
+            </div>
+            <div className="command-list">
+              {filteredCommands.map(c => (
+                <div key={c.id} className="command-item" onClick={() => { c.action(); setIsCommandPaletteOpen(false); }}>
+                  <c.icon size={16} />
+                  <span>{c.label}</span>
+                </div>
+              ))}
+              {filteredCommands.length === 0 && <div className="command-empty">No commands found</div>}
+            </div>
+          </div>
+        </div>
+      )}
       {editingId && (
         <textarea autoFocus className="inline-text-editor"
           style={{ position: 'absolute', top: ((shapes.find(s => s.id === editingId) as TextShape)?.y || 0) * stageScale + stagePos.y, left: ((shapes.find(s => s.id === editingId) as TextShape)?.x || 0) * stageScale + stagePos.x, fontSize: ((shapes.find(s => s.id === editingId) as TextShape)?.fontSize || 24) * stageScale, color: ((shapes.find(s => s.id === editingId) as TextShape)?.stroke || '#000'), transform: `rotate(${(shapes.find(s => s.id === editingId) as TextShape)?.angle || 0}deg)`, transformOrigin: 'top left' }}
           value={editingText} onChange={(e) => setEditingText(e.target.value)} onBlur={finishEditing}
         />
       )}
-      <Stage ref={(node) => { stageRef.current = node }} className="stage" width={viewport.width} height={viewport.height} draggable={activeTool === 'pan'} x={stagePos.x} y={stagePos.y} scaleX={stageScale} scaleY={stageScale} onDragEnd={(e) => setStagePos({ x: e.target.x(), y: e.target.y() })} onWheel={(e) => { e.evt.preventDefault(); const p = stageRef.current?.getPointerPosition(); if (p) setZoomAroundPoint(stageScale + (e.evt.deltaY > 0 ? -1 : 1) * 0.08, p); }} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} >
+      <Stage ref={(node) => { stageRef.current = node }} className={`stage ${showGrid ? 'show-grid' : ''}`} width={viewport.width} height={viewport.height} draggable={activeTool === 'pan'} x={stagePos.x} y={stagePos.y} scaleX={stageScale} scaleY={stageScale} onDragEnd={(e) => setStagePos({ x: e.target.x(), y: e.target.y() })} onWheel={(e) => { e.evt.preventDefault(); const p = stageRef.current?.getPointerPosition(); if (p) setZoomAroundPoint(stageScale + (e.evt.deltaY > 0 ? -1 : 1) * 0.08, p); }} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onTouchStart={() => setTouchStatus('Drawing...')} onTouchEnd={() => setTouchStatus(null)}>
         <Layer>
           {shapes.map((shape) => {
             const isSelected = selectedIds.includes(shape.id)
@@ -737,7 +861,7 @@ export default function App() {
         <div className="control-column"><label>Zoom: {Math.round(stageScale * 100)}%</label><div className="zoom-actions"><button className="action-button" onClick={() => zoomByStep(-1)}><ZoomOut size={15} /></button><button className="action-button" onClick={() => zoomByStep(1)}><ZoomIn size={15} /></button></div></div>
         {selectedIds.length > 0 && <button className="action-button danger full" onClick={removeSelected}><Trash2 size={15} /> Delete selected</button>}
       </aside>
-      <footer className="bottom-hud panel"><div className="hud-hints"><span>Space = temporary pan</span><span>V/H/R/O/L/A/P/T = quick tools</span><span>{shapes.length} objects</span></div><div className="credits">made with <strong>OpenClaw</strong> &lt;3 <strong>RJ</strong></div></footer>
+      <footer className="bottom-hud panel"><div className="hud-hints"><span>Space = temporary pan</span><span>V/H/R/O/L/A/P/T = quick tools</span><span>{shapes.length} objects</span>{touchStatus && <span className="touch-badge">{touchStatus}</span>}</div><div className="credits">made with <strong>OpenClaw</strong> &lt;3 <strong>RJ</strong></div></footer>
     </div>
   )
 }
