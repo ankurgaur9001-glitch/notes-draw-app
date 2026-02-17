@@ -12,14 +12,18 @@ import {
   Command,
   Download,
   FileCode,
+  Grid3X3,
   Hand,
   ImageDown,
+  Layout,
   Minus,
+  Moon,
   MousePointer2,
   Pencil,
   Redo2,
   Share2,
   Square,
+  Sun,
   Trash2,
   Type,
   Undo2,
@@ -53,6 +57,12 @@ type Shape = RectShape | EllipseShape | LineShape | DrawShape | TextShape
 
 const CURRENT_VERSION = 3
 const LOCAL_SCENE_KEY = 'notes-draw-app.scene.v3'
+
+const DEFAULT_ASSETS = [
+  { id: 'btn', type: 'rect', width: 100, height: 40, stroke: '#4f46e5', fill: '#4f46e5', strokeWidth: 2, roughness: 1, fillStyle: 'solid', angle: 0, label: 'Button' },
+  { id: 'inp', type: 'rect', width: 180, height: 40, stroke: '#d1d5db', fill: '#ffffff', strokeWidth: 2, roughness: 0.5, fillStyle: 'solid', angle: 0, label: 'Input' },
+  { id: 'card', type: 'rect', width: 200, height: 120, stroke: '#e5e7eb', fill: '#ffffff', strokeWidth: 1, roughness: 0, fillStyle: 'solid', angle: 0, label: 'Card' },
+]
 
 const ShapeSchema = z.discriminatedUnion('type', [
   z.object({
@@ -199,6 +209,9 @@ export default function App() {
   const [peers, setPeers] = useState<Map<number, { x: number, y: number, name: string }>>(new Map())
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
   const [commandSearch, setCommandSearch] = useState('')
+  const [showGrid, setShowGrid] = useState(false)
+  const [isDarkMode, setIsDarkMode] = useState(false)
+  const [showAssets, setShowAssets] = useState(false)
 
   const stageRef = useRef<Konva.Stage | null>(null)
   const transformerRef = useRef<Konva.Transformer | null>(null)
@@ -678,7 +691,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown); window.addEventListener('keyup', onKeyUp); window.addEventListener('paste', onPaste)
     return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('paste', onPaste); }
-  }, [redo, removeSelected, undo, zoomByStep, activeTool, shapes, stroke, strokeWidth, roughness, fillStyle, editingId, finishEditing])
+  }, [redo, removeSelected, undo, zoomByStep, activeTool, shapes, stroke, strokeWidth, roughness, fillStyle, editingId, finishEditing, isCommandPaletteOpen])
 
   const centerScene = () => {
     if (shapes.length === 0) {
@@ -712,13 +725,42 @@ export default function App() {
     { id: 'export_json', label: 'Export JSON', icon: Download, action: () => exportJson() },
     { id: 'export_svg', label: 'Export SVG', icon: FileCode, action: () => exportSvg() },
     { id: 'export_png', label: 'Export PNG', icon: ImageDown, action: () => exportPng() },
+    { id: 'toggle_grid', label: 'Toggle Grid', icon: Grid3X3, action: () => setShowGrid(prev => !prev) },
+    { id: 'toggle_dark', label: 'Toggle Dark Mode', icon: isDarkMode ? Sun : Moon, action: () => setIsDarkMode(prev => !prev) },
+    { id: 'toggle_assets', label: 'Toggle Asset Library', icon: Layout, action: () => setShowAssets(prev => !prev) },
     { id: 'collab', label: 'Start Collaboration', icon: Users, action: () => joinOrCreateRoom() },
   ]
 
   const filteredCommands = COMMANDS.filter(c => c.label.toLowerCase().includes(commandSearch.toLowerCase()))
 
   return (
-    <div className="workspace-shell">
+    <div className={`workspace-shell ${isDarkMode ? 'dark-theme' : ''}`}>
+      {showAssets && (
+        <aside className="assets-sidebar panel">
+          <div className="sidebar-header">
+            <h3>Asset Library</h3>
+            <button className="icon-btn" onClick={() => setShowAssets(false)}><Trash2 size={14} /></button>
+          </div>
+          <div className="assets-grid">
+            {DEFAULT_ASSETS.map(asset => (
+              <div 
+                key={asset.id} 
+                className="asset-item"
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData('claw_asset', JSON.stringify(asset))}
+                onClick={() => {
+                  const id = uid()
+                  const shape: any = { ...asset, id, x: 100, y: 100, label: undefined }
+                  commitScene([...shapes, shape])
+                }}
+              >
+                <div className="asset-preview" style={{ background: asset.fill === '#00000000' ? '#eee' : asset.fill, borderColor: asset.stroke }}></div>
+                <span>{asset.label}</span>
+              </div>
+            ))}
+          </div>
+        </aside>
+      )}
       {isCommandPaletteOpen && (
         <div className="command-palette-overlay" onClick={() => setIsCommandPaletteOpen(false)}>
           <div className="command-palette" onClick={e => e.stopPropagation()}>
@@ -755,7 +797,7 @@ export default function App() {
           value={editingText} onChange={(e) => setEditingText(e.target.value)} onBlur={finishEditing}
         />
       )}
-      <Stage ref={(node) => { stageRef.current = node }} className="stage" width={viewport.width} height={viewport.height} draggable={activeTool === 'pan'} x={stagePos.x} y={stagePos.y} scaleX={stageScale} scaleY={stageScale} onDragEnd={(e) => setStagePos({ x: e.target.x(), y: e.target.y() })} onWheel={(e) => { e.evt.preventDefault(); const p = stageRef.current?.getPointerPosition(); if (p) setZoomAroundPoint(stageScale + (e.evt.deltaY > 0 ? -1 : 1) * 0.08, p); }} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} >
+      <Stage ref={(node) => { stageRef.current = node }} className={`stage ${showGrid ? 'show-grid' : ''}`} width={viewport.width} height={viewport.height} draggable={activeTool === 'pan'} x={stagePos.x} y={stagePos.y} scaleX={stageScale} scaleY={stageScale} onDragEnd={(e) => setStagePos({ x: e.target.x(), y: e.target.y() })} onWheel={(e) => { e.evt.preventDefault(); const p = stageRef.current?.getPointerPosition(); if (p) setZoomAroundPoint(stageScale + (e.evt.deltaY > 0 ? -1 : 1) * 0.08, p); }} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} >
         <Layer>
           {shapes.map((shape) => {
             const isSelected = selectedIds.includes(shape.id)

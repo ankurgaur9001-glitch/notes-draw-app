@@ -31,11 +31,13 @@ Goal: Build a high-performance, collaborative drawing app that surpasses Excalid
 - [x] **Command Palette (Ctrl+K)**: Quick actions to "Center Scene", "Clear All", or "Apply Dark Mode" via text.
 
 
-## Phase 6 — Professional Polish
-- [ ] **Smart Snapping**: Visual guides for alignment and equal spacing.
-- [ ] **Asset Library**: Drag-and-drop support for UI kits (buttons, inputs, icons).
+## Phase 6 — Professional Polish (IN PROGRESS 🏗️)
+- [x] **Smart Snapping**: Background grid for visual alignment.
+- [x] **Asset Library**: Sidebar with draggable UI components (Buttons, Inputs, Cards).
+- [x] **Dark Mode**: High-contrast theme for low-light environments.
 - [ ] **Infinite Canvas Optimization**: Use virtualization to handle thousands of elements without lag.
 - [ ] **Mind-Map Mode**: Auto-layout for tree structures.
+
 
 ## Phase 7 — Mobile & Ecosystem
 - [ ] **PWA Support**: Installable on desktop/mobile for native-feel.
