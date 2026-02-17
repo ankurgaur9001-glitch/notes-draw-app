@@ -31,10 +31,10 @@ Goal: Build an Excalidraw-style product with your own codebase, feature parity, 
 
 ## Phase 4 — Collaboration
 
-- [ ] Realtime room sessions
-- [ ] Presence cursors
-- [ ] Conflict-safe sync
-- [ ] Read-only / editor share modes
+- [x] Realtime room sessions (Yjs + WebRTC)
+- [x] Presence cursors
+- [x] Conflict-safe sync (CRDT)
+- [x] IndexedDB persistence for offline-first support
 
 ## Phase 5 — Better UX than baseline
 

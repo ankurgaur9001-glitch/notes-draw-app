@@ -4,6 +4,9 @@ import type Konva from 'konva'
 import rough from 'roughjs'
 import { z } from 'zod'
 import { fromError } from 'zod-validation-error'
+import * as Y from 'yjs'
+import { WebrtcProvider } from 'y-webrtc'
+import { IndexeddbPersistence } from 'y-indexeddb'
 import {
   ArrowRight,
   Circle as CircleIcon,
@@ -21,6 +24,7 @@ import {
   Type,
   Undo2,
   Upload,
+  Users,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
@@ -195,6 +199,8 @@ export default function App() {
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight })
   const [shareState, setShareState] = useState<'idle' | 'publishing' | 'copied' | 'failed'>('idle')
+  const [roomId, setRoomId] = useState<string | null>(null)
+  const [peers, setPeers] = useState<Map<number, { x: number, y: number, name: string }>>(new Map())
 
   const stageRef = useRef<Konva.Stage | null>(null)
   const transformerRef = useRef<Konva.Transformer | null>(null)
@@ -202,7 +208,56 @@ export default function App() {
   const drawSnapshotRef = useRef<Shape[] | null>(null)
   const dragSnapshotRef = useRef<Shape[] | null>(null)
 
+  const ydocRef = useRef<Y.Doc>(new Y.Doc())
+  const yshapesRef = useRef<Y.Array<Shape>>(ydocRef.current.getArray('shapes'))
+  const providerRef = useRef<WebrtcProvider | null>(null)
+
   const activeTool = spacePan ? 'pan' : tool
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const room = params.get('room')
+    if (room) {
+      setRoomId(room)
+      
+      const provider = new WebrtcProvider(`clawcanvas-room-${room}`, ydocRef.current)
+      providerRef.current = provider
+      
+      new IndexeddbPersistence(`clawcanvas-room-${room}`, ydocRef.current)
+
+      yshapesRef.current.observe(() => {
+        setShapes(yshapesRef.current.toArray())
+      })
+
+      provider.awareness.on('change', () => {
+        const states = provider.awareness.getStates()
+        const newPeers = new Map()
+        states.forEach((state: any, clientID: number) => {
+          if (clientID !== ydocRef.current.clientID && state.user) {
+            newPeers.set(clientID, state.user)
+          }
+        })
+        setPeers(newPeers)
+      })
+
+      return () => {
+        provider.destroy()
+      }
+    }
+  }, [])
+
+  const updateAwareness = (x: number, y: number) => {
+    if (providerRef.current) {
+      providerRef.current.awareness.setLocalStateField('user', {
+        x, y, name: `User ${ydocRef.current.clientID % 100}`
+      })
+    }
+  }
+
+  const joinOrCreateRoom = () => {
+    const id = uid().slice(0, 8)
+    window.location.search = `?room=${id}`
+  }
 
   useEffect(() => {
     const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight })
@@ -289,6 +344,13 @@ export default function App() {
   const commitScene = (nextScene: Shape[], previousScene: Shape[] = shapes) => {
     pushUndoState(previousScene)
     setShapes(nextScene)
+    
+    if (roomId) {
+      ydocRef.current.transact(() => {
+        yshapesRef.current.delete(0, yshapesRef.current.length)
+        yshapesRef.current.push(nextScene)
+      })
+    }
   }
 
   const pointerToCanvas = (stage: Konva.Stage) => {
@@ -414,6 +476,8 @@ export default function App() {
     if (!stage) return
     const p = pointerToCanvas(stage)
     if (!p) return
+
+    if (roomId) updateAwareness(p.x, p.y)
 
     if (isSelecting && selectionRect) {
       setSelectionRect(prev => prev ? ({ ...prev, width: p.x - prev.x, height: p.y - prev.y }) : null)
@@ -1099,6 +1163,22 @@ export default function App() {
               }}
             />
           )}
+          {Array.from(peers.entries()).map(([id, user]) => (
+            <KonvaShape
+              key={id}
+              sceneFunc={(context) => {
+                context.beginPath();
+                context.fillStyle = '#4f46e5';
+                context.moveTo(user.x, user.y);
+                context.lineTo(user.x + 10, user.y + 20);
+                context.lineTo(user.x + 20, user.y + 10);
+                context.closePath();
+                context.fill();
+                context.font = '12px sans-serif';
+                context.fillText(user.name, user.x + 20, user.y + 30);
+              }}
+            />
+          ))}
         </Layer>
       </Stage>
 
@@ -1112,6 +1192,16 @@ export default function App() {
         </div>
 
         <div className="actions">
+          {roomId ? (
+             <div className="room-indicator">
+               <Users size={16} />
+               <span>Room: {roomId}</span>
+             </div>
+          ) : (
+            <button className="action-button primary" onClick={joinOrCreateRoom}>
+              <Users size={16} /> Live Collab
+            </button>
+          )}
           <button className="action-button" onClick={undo} title="Undo (Ctrl/Cmd + Z)">
             <Undo2 size={16} /> Undo
           </button>
