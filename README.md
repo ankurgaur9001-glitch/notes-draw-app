@@ -1,6 +1,6 @@
 # Notes Draw App (Excalidraw-style MVP)
 
-A lightweight whiteboard app inspired by Excalidraw.
+A lightweight whiteboard app inspired by Excalidraw, built with your own codebase (not embedding the full Excalidraw package).
 
 ## Implemented (v1)
 
@@ -12,6 +12,7 @@ A lightweight whiteboard app inspired by Excalidraw.
 - Clear canvas
 - Save / load drawing as JSON
 - Export drawing as PNG
+- Generate **share link** that encodes the current drawing in URL
 
 ## Stack
 
