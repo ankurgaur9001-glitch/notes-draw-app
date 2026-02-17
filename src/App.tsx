@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Arrow as KonvaArrow, Ellipse, Layer, Line, Rect, Stage, Text } from 'react-konva'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { Layer, Stage, Text, Shape as KonvaShape } from 'react-konva'
 import type Konva from 'konva'
+import rough from 'roughjs'
 import {
   ArrowRight,
   Circle as CircleIcon,
@@ -30,6 +31,7 @@ type ShapeBase = {
   stroke: string
   fill: string
   strokeWidth: number
+  roughness: number
 }
 
 type RectShape = ShapeBase & { type: 'rect'; x: number; y: number; width: number; height: number }
@@ -62,6 +64,8 @@ const SNAPSHOT_LIMIT = 100
 const LOCAL_SCENE_KEY = 'notes-draw-app.scene.v2'
 const JSONBLOB_ENDPOINT = 'https://jsonblob.com/api/jsonBlob'
 
+const generator = rough.generator()
+
 const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`
 
 const encodeDrawing = (input: Shape[]) => btoa(unescape(encodeURIComponent(JSON.stringify(input))))
@@ -75,6 +79,7 @@ export default function App() {
   const [stroke, setStroke] = useState('#111827')
   const [fill, setFill] = useState('#00000000')
   const [strokeWidth, setStrokeWidth] = useState(2)
+  const [roughness, setRoughness] = useState(1)
   const [shapes, setShapes] = useState<Shape[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [isDrawing, setIsDrawing] = useState(false)
@@ -182,12 +187,12 @@ export default function App() {
     })
   }
 
-  const zoomByStep = (direction: 1 | -1) => {
+  const zoomByStep = useCallback((direction: 1 | -1) => {
     setZoomAroundPoint(stageScale + direction * 0.1, {
       x: viewport.width / 2,
       y: viewport.height / 2,
     })
-  }
+  }, [stageScale, stagePos, viewport])
 
   const handleMouseDown = () => {
     const stage = stageRef.current
@@ -219,6 +224,7 @@ export default function App() {
           stroke,
           fill: '#00000000',
           strokeWidth,
+          roughness,
         },
       ]
 
@@ -234,23 +240,23 @@ export default function App() {
     const id = uid()
 
     if (activeTool === 'rect') {
-      draftRef.current = { id, type: 'rect', x: p.x, y: p.y, width: 1, height: 1, stroke, fill, strokeWidth }
+      draftRef.current = { id, type: 'rect', x: p.x, y: p.y, width: 1, height: 1, stroke, fill, strokeWidth, roughness }
     }
 
     if (activeTool === 'ellipse') {
-      draftRef.current = { id, type: 'ellipse', x: p.x, y: p.y, radiusX: 1, radiusY: 1, stroke, fill, strokeWidth }
+      draftRef.current = { id, type: 'ellipse', x: p.x, y: p.y, radiusX: 1, radiusY: 1, stroke, fill, strokeWidth, roughness }
     }
 
     if (activeTool === 'line') {
-      draftRef.current = { id, type: 'line', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth }
+      draftRef.current = { id, type: 'line', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth, roughness }
     }
 
     if (activeTool === 'arrow') {
-      draftRef.current = { id, type: 'arrow', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth }
+      draftRef.current = { id, type: 'arrow', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth, roughness }
     }
 
     if (activeTool === 'draw') {
-      draftRef.current = { id, type: 'draw', points: [p.x, p.y], stroke, fill: '#00000000', strokeWidth }
+      draftRef.current = { id, type: 'draw', points: [p.x, p.y], stroke, fill: '#00000000', strokeWidth, roughness }
     }
 
     if (draftRef.current) {
@@ -336,7 +342,7 @@ export default function App() {
     setShapes((prev) => prev.map((shape) => (shape.id === id ? updater(shape) : shape)))
   }
 
-  const undo = () => {
+  const undo = useCallback(() => {
     if (!history.length) return
 
     const previousScene = history[history.length - 1]
@@ -344,9 +350,9 @@ export default function App() {
     setHistory((prev) => prev.slice(0, -1))
     setShapes(previousScene)
     setSelectedId(null)
-  }
+  }, [history, shapes])
 
-  const redo = () => {
+  const redo = useCallback(() => {
     if (!redoStack.length) return
 
     const nextScene = redoStack[0]
@@ -354,13 +360,13 @@ export default function App() {
     setRedoStack((prev) => prev.slice(1))
     setShapes(nextScene)
     setSelectedId(null)
-  }
+  }, [redoStack, shapes])
 
-  const removeSelected = () => {
+  const removeSelected = useCallback(() => {
     if (!selectedId) return
     commitScene(shapes.filter((shape) => shape.id !== selectedId))
     setSelectedId(null)
-  }
+  }, [selectedId, shapes])
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(shapes, null, 2)], { type: 'application/json' })
@@ -546,12 +552,10 @@ export default function App() {
       >
         <Layer>
           {shapes.map((shape) => {
+            const isSelected = selectedId === shape.id
             const common = {
               key: shape.id,
-              stroke: shape.stroke,
-              strokeWidth: shape.strokeWidth,
               draggable: activeTool === 'select',
-              dash: selectedId === shape.id ? [6, 4] : [],
               onClick: () => setSelectedId(shape.id),
               onTap: () => setSelectedId(shape.id),
               onDragStart: () => {
@@ -563,15 +567,12 @@ export default function App() {
 
                 updateShape(shape.id, (nextShape) => {
                   if (nextShape.type === 'rect' || nextShape.type === 'ellipse' || nextShape.type === 'text') {
-                    return { ...nextShape, x: nodeX, y: nodeY }
+                    return { ...nextShape, x: nodeX + nextShape.x, y: nodeY + nextShape.y }
                   }
 
                   if (nextShape.type === 'line' || nextShape.type === 'arrow' || nextShape.type === 'draw') {
-                    const [startX, startY] = [nextShape.points[0], nextShape.points[1]]
-                    const dx = nodeX - startX
-                    const dy = nodeY - startY
                     const translated = nextShape.points.map((point, index) =>
-                      index % 2 === 0 ? point + dx : point + dy,
+                      index % 2 === 0 ? point + nodeX : point + nodeY,
                     )
                     return { ...nextShape, points: translated }
                   }
@@ -586,59 +587,66 @@ export default function App() {
                 dragSnapshotRef.current = null
                 event.target.position({ x: 0, y: 0 })
               },
-            }
+              sceneFunc: (context: any, shapeNode: any) => {
+                const roughCanvas = rough.canvas(context.canvas._canvas)
+                const options = {
+                  stroke: shape.stroke,
+                  strokeWidth: shape.strokeWidth,
+                  roughness: shape.roughness,
+                  fill: shape.fill === '#00000000' ? undefined : shape.fill,
+                  fillStyle: 'hachure' as const,
+                }
 
-            if (shape.type === 'rect') {
-              return <Rect {...common} x={shape.x} y={shape.y} width={shape.width} height={shape.height} fill={shape.fill} />
-            }
+                // Apply Konva transformations
+                context.save()
+                
+                if (shape.type === 'rect') {
+                  const drawing = generator.rectangle(shape.x, shape.y, shape.width, shape.height, options)
+                  roughCanvas.draw(drawing)
+                } else if (shape.type === 'ellipse') {
+                  const drawing = generator.ellipse(shape.x, shape.y, shape.radiusX * 2, shape.radiusY * 2, options)
+                  roughCanvas.draw(drawing)
+                } else if (shape.type === 'line') {
+                  const drawing = generator.line(shape.points[0], shape.points[1], shape.points[2], shape.points[3], options)
+                  roughCanvas.draw(drawing)
+                } else if (shape.type === 'arrow') {
+                  const drawing = generator.line(shape.points[0], shape.points[1], shape.points[2], shape.points[3], options)
+                  roughCanvas.draw(drawing)
+                  // Simple arrow head logic could be added here
+                } else if (shape.type === 'draw') {
+                  const pts: [number, number][] = []
+                  for (let i = 0; i < shape.points.length; i += 2) {
+                    pts.push([shape.points[i], shape.points[i+1]])
+                  }
+                  const drawing = generator.curve(pts, options)
+                  roughCanvas.draw(drawing)
+                }
 
-            if (shape.type === 'ellipse') {
-              return (
-                <Ellipse
-                  {...common}
-                  x={shape.x}
-                  y={shape.y}
-                  radiusX={shape.radiusX}
-                  radiusY={shape.radiusY}
-                  fill={shape.fill}
-                />
-              )
-            }
+                if (isSelected) {
+                   // Draw selection bound manually since we are overriding sceneFunc
+                }
 
-            if (shape.type === 'line') {
-              return <Line {...common} points={shape.points} lineCap="round" lineJoin="round" />
-            }
-
-            if (shape.type === 'arrow') {
-              return (
-                <KonvaArrow
-                  {...common}
-                  points={shape.points}
-                  pointerLength={12}
-                  pointerWidth={12}
-                  fill={shape.stroke}
-                />
-              )
-            }
-
-            if (shape.type === 'draw') {
-              return <Line {...common} points={shape.points} lineCap="round" lineJoin="round" tension={0.2} />
+                context.restore()
+                context.fillStrokeShape(shapeNode)
+              }
             }
 
             if (shape.type === 'text') {
               return (
                 <Text
-                  {...common}
+                  key={shape.id}
                   x={shape.x}
                   y={shape.y}
                   text={shape.text}
                   fontSize={shape.fontSize}
                   fill={shape.stroke}
+                  draggable={activeTool === 'select'}
+                  onClick={() => setSelectedId(shape.id)}
                 />
               )
             }
 
-            return null
+            return <KonvaShape {...common} />
           })}
         </Layer>
       </Stage>
@@ -713,6 +721,7 @@ export default function App() {
             onChange={(event) => {
               const next = event.target.value
               setStroke(next)
+              if (selectedId) updateShape(selectedId, s => ({ ...s, stroke: next }))
             }}
           />
         </div>
@@ -725,6 +734,7 @@ export default function App() {
             onChange={(event) => {
               const next = event.target.value
               setFill(next)
+              if (selectedId) updateShape(selectedId, s => ({ ...s, fill: next }))
             }}
           />
         </div>
@@ -736,7 +746,27 @@ export default function App() {
             min={1}
             max={12}
             value={strokeWidth}
-            onChange={(event) => setStrokeWidth(Number(event.target.value))}
+            onChange={(event) => {
+              const next = Number(event.target.value)
+              setStrokeWidth(next)
+              if (selectedId) updateShape(selectedId, s => ({ ...s, strokeWidth: next }))
+            }}
+          />
+        </div>
+
+        <div className="control-column">
+          <label>Roughness: {roughness}</label>
+          <input
+            type="range"
+            min={0}
+            max={5}
+            step={0.5}
+            value={roughness}
+            onChange={(event) => {
+              const next = Number(event.target.value)
+              setRoughness(next)
+              if (selectedId) updateShape(selectedId, s => ({ ...s, roughness: next }))
+            }}
           />
         </div>
 
