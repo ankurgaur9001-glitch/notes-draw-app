@@ -16,6 +16,10 @@
     "react-dom": "^19.2.0",
     "react-konva": "^19.2.2",
     "roughjs": "^4.6.6",
+    "y-indexeddb": "^9.0.12",
+    "y-protocols": "^1.0.7",
+    "y-webrtc": "^10.3.0",
+    "yjs": "^13.6.29",
     "zod": "^4.3.6",
     "zod-validation-error": "^5.0.0"
   },
