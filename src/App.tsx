@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { Layer, Stage, Text, Shape as KonvaShape } from 'react-konva'
+import { Layer, Stage, Text, Shape as KonvaShape, Transformer } from 'react-konva'
 import type Konva from 'konva'
 import rough from 'roughjs'
 import {
@@ -33,6 +33,7 @@ type ShapeBase = {
   strokeWidth: number
   roughness: number
   fillStyle: 'hachure' | 'solid' | 'zigzag' | 'cross-hatch' | 'dots' | 'sunburst'
+  angle: number
 }
 
 type RectShape = ShapeBase & { type: 'rect'; x: number; y: number; width: number; height: number }
@@ -97,6 +98,7 @@ export default function App() {
   const [shareState, setShareState] = useState<'idle' | 'publishing' | 'copied' | 'failed'>('idle')
 
   const stageRef = useRef<Konva.Stage | null>(null)
+  const transformerRef = useRef<Konva.Transformer | null>(null)
   const draftRef = useRef<Shape | null>(null)
   const drawSnapshotRef = useRef<Shape[] | null>(null)
   const dragSnapshotRef = useRef<Shape[] | null>(null)
@@ -155,6 +157,16 @@ export default function App() {
       console.error('Autosave failed', error)
     }
   }, [shapes])
+
+  useEffect(() => {
+    if (transformerRef.current) {
+      const stage = stageRef.current;
+      if (!stage) return;
+      const nodes = selectedIds.map(id => stage.findOne(`#${id}`)).filter(Boolean);
+      transformerRef.current.nodes(nodes as Konva.Node[]);
+      transformerRef.current.getLayer()?.batchDraw();
+    }
+  }, [selectedIds, shapes]);
 
   const pushUndoState = (previousScene: Shape[]) => {
     setHistory((prev) => [...prev.slice(-SNAPSHOT_LIMIT + 1), previousScene])
@@ -243,6 +255,7 @@ export default function App() {
         strokeWidth,
         roughness,
         fillStyle,
+        angle: 0,
       }
       
       setShapes(prev => [...prev, newTextShape])
@@ -259,23 +272,23 @@ export default function App() {
     const id = uid()
 
     if (activeTool === 'rect') {
-      draftRef.current = { id, type: 'rect', x: p.x, y: p.y, width: 1, height: 1, stroke, fill, strokeWidth, roughness, fillStyle }
+      draftRef.current = { id, type: 'rect', x: p.x, y: p.y, width: 1, height: 1, stroke, fill, strokeWidth, roughness, fillStyle, angle: 0 }
     }
 
     if (activeTool === 'ellipse') {
-      draftRef.current = { id, type: 'ellipse', x: p.x, y: p.y, radiusX: 1, radiusY: 1, stroke, fill, strokeWidth, roughness, fillStyle }
+      draftRef.current = { id, type: 'ellipse', x: p.x, y: p.y, radiusX: 1, radiusY: 1, stroke, fill, strokeWidth, roughness, fillStyle, angle: 0 }
     }
 
     if (activeTool === 'line') {
-      draftRef.current = { id, type: 'line', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth, roughness, fillStyle }
+      draftRef.current = { id, type: 'line', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth, roughness, fillStyle, angle: 0 }
     }
 
     if (activeTool === 'arrow') {
-      draftRef.current = { id, type: 'arrow', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth, roughness, fillStyle }
+      draftRef.current = { id, type: 'arrow', points: [p.x, p.y, p.x, p.y], stroke, fill, strokeWidth, roughness, fillStyle, angle: 0 }
     }
 
     if (activeTool === 'draw') {
-      draftRef.current = { id, type: 'draw', points: [p.x, p.y], stroke, fill: '#00000000', strokeWidth, roughness, fillStyle }
+      draftRef.current = { id, type: 'draw', points: [p.x, p.y], stroke, fill: '#00000000', strokeWidth, roughness, fillStyle, angle: 0 }
     }
 
     if (draftRef.current) {
@@ -594,22 +607,24 @@ export default function App() {
 
   return (
     <div className="workspace-shell">
-      {editingId && (
-        <textarea
-          autoFocus
-          className="inline-text-editor"
-          style={{
-            position: 'absolute',
-            top: (shapes.find(s => s.id === editingId) as TextShape).y * stageScale + stagePos.y,
-            left: (shapes.find(s => s.id === editingId) as TextShape).x * stageScale + stagePos.x,
-            fontSize: (shapes.find(s => s.id === editingId) as TextShape).fontSize * stageScale,
-            color: (shapes.find(s => s.id === editingId) as TextShape).stroke,
-          }}
-          value={editingText}
-          onChange={(e) => setEditingText(e.target.value)}
-          onBlur={finishEditing}
-        />
-      )}
+          {editingId && (
+            <textarea
+              autoFocus
+              className="inline-text-editor"
+              style={{
+                position: 'absolute',
+                top: ((shapes.find(s => s.id === editingId) as TextShape)?.y || 0) * stageScale + stagePos.y,
+                left: ((shapes.find(s => s.id === editingId) as TextShape)?.x || 0) * stageScale + stagePos.x,
+                fontSize: ((shapes.find(s => s.id === editingId) as TextShape)?.fontSize || 24) * stageScale,
+                color: ((shapes.find(s => s.id === editingId) as TextShape)?.stroke || '#000'),
+                transform: `rotate(${(shapes.find(s => s.id === editingId) as TextShape)?.angle || 0}deg)`,
+                transformOrigin: 'top left'
+              }}
+              value={editingText}
+              onChange={(e) => setEditingText(e.target.value)}
+              onBlur={finishEditing}
+            />
+          )}
       <Stage
         ref={(node) => {
           stageRef.current = node
@@ -637,8 +652,66 @@ export default function App() {
         <Layer>
           {shapes.map((shape) => {
             const isSelected = selectedIds.includes(shape.id)
+            const isText = shape.type === 'text'
+            
+            if (isText) {
+              return (
+                <Text
+                  key={shape.id}
+                  id={shape.id}
+                  x={shape.x}
+                  y={shape.y}
+                  rotation={shape.angle}
+                  text={shape.text}
+                  fontSize={shape.fontSize}
+                  fill={shape.stroke}
+                  draggable={activeTool === 'select' && isSelected}
+                  onDragEnd={(event: Konva.KonvaEventObject<DragEvent>) => {
+                    if (event.target !== event.currentTarget) return;
+                    setShapes(prev => prev.map(s => {
+                      if (s.id === shape.id && s.type === 'text') {
+                        return { ...s, x: event.target.x(), y: event.target.y() }
+                      }
+                      return s
+                    }))
+                  }}
+                  onTransformEnd={(event: any) => {
+                    const node = event.target;
+                    setShapes(prev => prev.map(s => {
+                      if (s.id === shape.id && s.type === 'text') {
+                        return {
+                          ...s,
+                          x: node.x(),
+                          y: node.y(),
+                          fontSize: s.fontSize * node.scaleX(),
+                          angle: node.rotation()
+                        }
+                      }
+                      return s
+                    }));
+                    node.scaleX(1);
+                    node.scaleY(1);
+                  }}
+                  onDblClick={() => {
+                    setEditingId(shape.id)
+                    setEditingText(shape.text)
+                  }}
+                  onClick={(e: any) => {
+                    if (activeTool !== 'select') return;
+                    e.cancelBubble = true;
+                    if (e.evt.shiftKey) {
+                      setSelectedIds(prev => prev.includes(shape.id) ? prev.filter(id => id !== shape.id) : [...prev, shape.id])
+                    } else {
+                      setSelectedIds([shape.id])
+                    }
+                  }}
+                />
+              )
+            }
+
             const common = {
               key: shape.id,
+              id: shape.id,
               draggable: activeTool === 'select' && isSelected,
               onClick: (e: any) => {
                 if (activeTool !== 'select') return;
@@ -677,8 +750,37 @@ export default function App() {
                 dragSnapshotRef.current = null
                 event.target.position({ x: 0, y: 0 })
               },
+              onTransformEnd: (event: any) => {
+                const node = event.target;
+                setShapes(prev => prev.map(s => {
+                  if (s.id !== shape.id) return s;
+                  
+                  if (s.type === 'rect') {
+                    return { 
+                      ...s, 
+                      x: node.x(), 
+                      y: node.y(), 
+                      width: s.width * node.scaleX(), 
+                      height: s.height * node.scaleY(),
+                      angle: node.rotation()
+                    };
+                  }
+                  if (s.type === 'ellipse') {
+                    return { 
+                      ...s, 
+                      x: node.x(), 
+                      y: node.y(), 
+                      radiusX: s.radiusX * node.scaleX(), 
+                      radiusY: s.radiusY * node.scaleY(),
+                      angle: node.rotation()
+                    };
+                  }
+                  return s;
+                }));
+                node.scaleX(1);
+                node.scaleY(1);
+              },
               sceneFunc: (context: any, shapeNode: any) => {
-                shapeNode.id(shape.id);
                 shapeNode.name('konva-shape');
                 const roughCanvas = rough.canvas(context.canvas._canvas)
                 const options = {
@@ -689,9 +791,16 @@ export default function App() {
                   fillStyle: shape.fillStyle,
                 }
 
-                // Apply Konva transformations
                 context.save()
                 
+                if (shape.angle) {
+                   const cx = (shape as any).x || 0
+                   const cy = (shape as any).y || 0
+                   context.translate(cx, cy);
+                   context.rotate(shape.angle * Math.PI / 180);
+                   context.translate(-cx, -cy);
+                }
+
                 if (shape.type === 'rect') {
                   const drawing = generator.rectangle(shape.x, shape.y, shape.width, shape.height, options)
                   roughCanvas.draw(drawing)
@@ -703,7 +812,6 @@ export default function App() {
                   roughCanvas.draw(drawing)
                   
                   if (shape.type === 'arrow') {
-                    // Calculate arrow head
                     const x1 = shape.points[0]
                     const y1 = shape.points[1]
                     const x2 = shape.points[2]
@@ -730,57 +838,24 @@ export default function App() {
                   roughCanvas.draw(drawing)
                 }
 
-                if (isSelected) {
-                   // Draw selection bound manually since we are overriding sceneFunc
-                }
-
                 context.restore()
                 context.fillStrokeShape(shapeNode)
               }
             }
 
-            if (shape.type === 'text') {
-              return (
-                <Text
-                  key={shape.id}
-                  x={shape.x}
-                  y={shape.y}
-                  text={shape.text}
-                  fontSize={shape.fontSize}
-                  fill={shape.stroke}
-                  draggable={activeTool === 'select' && isSelected}
-                  onDragEnd={(event: Konva.KonvaEventObject<DragEvent>) => {
-                    if (event.target !== event.currentTarget) return;
-                    const nodeX = event.target.x()
-                    const nodeY = event.target.y()
-
-                    setShapes(prev => prev.map(s => {
-                      if (s.id === shape.id && (s.type === 'rect' || s.type === 'ellipse' || s.type === 'text')) {
-                        return { ...s, x: s.x + nodeX, y: s.y + nodeY }
-                      }
-                      return s
-                    }))
-                    event.target.position({ x: 0, y: 0 })
-                  }}
-                  onDblClick={() => {
-                    setEditingId(shape.id)
-                    setEditingText(shape.text)
-                  }}
-                  onClick={(e: any) => {
-                    if (activeTool !== 'select') return;
-                    e.cancelBubble = true;
-                    if (e.evt.shiftKey) {
-                      setSelectedIds(prev => prev.includes(shape.id) ? prev.filter(id => id !== shape.id) : [...prev, shape.id])
-                    } else {
-                      setSelectedIds([shape.id])
-                    }
-                  }}
-                />
-              )
-            }
-
             return <KonvaShape {...common} />
           })}
+          {selectedIds.length > 0 && activeTool === 'select' && (
+            <Transformer
+              ref={transformerRef}
+              boundBoxFunc={(oldBox, newBox) => {
+                if (Math.abs(newBox.width) < 5 || Math.abs(newBox.height) < 5) {
+                  return oldBox;
+                }
+                return newBox;
+              }}
+            />
+          )}
           {selectionRect && (
             <KonvaShape
               sceneFunc={(context) => {
