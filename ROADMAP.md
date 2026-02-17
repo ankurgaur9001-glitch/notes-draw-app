@@ -24,10 +24,10 @@ Goal: Build an Excalidraw-style product with your own codebase, feature parity, 
 
 ## Phase 3 — Files & Reliability
 
-- [ ] Scene versioning + migration guard
-- [ ] Robust import validation
-- [ ] Safer export pipeline (PNG/SVG)
-- [ ] Crash-safe session restore
+- [x] Scene versioning + migration guard
+- [x] Robust import validation (Zod)
+- [x] Safer export pipeline (PNG/SVG)
+- [x] Crash-safe session restore (Stage state)
 
 ## Phase 4 — Collaboration
 
