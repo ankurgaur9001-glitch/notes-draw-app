@@ -160,29 +160,23 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   { id: 'text', label: 'Text', shortcut: 'T', icon: Type },
 ]
 
-const SNAPSHOT_LIMIT = 100
+const SNAPSHOT_LIMIT = 50
 const JSONBLOB_ENDPOINT = 'https://jsonblob.com/api/jsonBlob'
 
 const generator = rough.generator()
 
 const migrateScene = (data: any): Shape[] => {
-  if (Array.isArray(data)) {
-    return data as Shape[]
-  }
+  if (Array.isArray(data)) return data as Shape[]
   if (data && typeof data === 'object' && 'version' in data) {
-    if (data.version === 3) {
-      return data.shapes
-    }
+    if (data.version === 3) return data.shapes
   }
   return []
 }
 
 const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`
-
 const encodeDrawing = (input: Shape[]) => btoa(unescape(encodeURIComponent(JSON.stringify(input))))
 const decodeDrawing = (input: string) => JSON.parse(decodeURIComponent(escape(atob(input)))) as Shape[]
-
-const clampScale = (value: number) => Math.max(0.2, Math.min(4, value))
+const clampScale = (value: number) => Math.max(0.1, Math.min(10, value))
 
 export default function App() {
   const [tool, setTool] = useState<Tool>('select')
@@ -221,7 +215,7 @@ export default function App() {
   const dragSnapshotRef = useRef<Shape[] | null>(null)
 
   const ydocRef = useRef<Y.Doc>(new Y.Doc())
-  const yshapesRef = useRef<Y.Array<Shape>>(ydocRef.current.getArray('shapes'))
+  const yshapesRef = useRef<Y.Map<Shape>>(ydocRef.current.getMap('shapes'))
   const providerRef = useRef<WebrtcProvider | null>(null)
 
   const activeTool = spacePan ? 'pan' : tool
@@ -231,12 +225,24 @@ export default function App() {
     const room = params.get('room')
     if (room) {
       setRoomId(room)
-      const provider = new WebrtcProvider(`clawcanvas-room-${room}`, ydocRef.current)
+      const provider = new WebrtcProvider(`clawcanvas-room-${room}`, ydocRef.current, {
+        signaling: [
+          'wss://y-webrtc-signaling-eu.herokuapp.com',
+          'wss://y-webrtc-signaling-us.herokuapp.com',
+          'wss://signaling.yjs.dev'
+        ]
+      })
       providerRef.current = provider
       new IndexeddbPersistence(`clawcanvas-room-${room}`, ydocRef.current)
-      yshapesRef.current.observe(() => {
-        setShapes(yshapesRef.current.toArray())
-      })
+      
+      const syncShapes = () => {
+        const remoteShapes = Array.from(yshapesRef.current.values())
+        setShapes(remoteShapes)
+      }
+      
+      yshapesRef.current.observe(() => syncShapes())
+      syncShapes()
+
       provider.awareness.on('change', () => {
         const states = provider.awareness.getStates()
         const newPeers = new Map()
@@ -247,9 +253,7 @@ export default function App() {
         })
         setPeers(newPeers)
       })
-      return () => {
-        provider.destroy()
-      }
+      return () => provider.destroy()
     }
   }, [])
 
@@ -263,7 +267,7 @@ export default function App() {
 
   const joinOrCreateRoom = () => {
     const id = uid().slice(0, 8)
-    window.location.search = `?room=${id}`
+    window.location.href = `${window.location.origin}${window.location.pathname}?room=${id}`
   }
 
   useEffect(() => {
@@ -289,8 +293,8 @@ export default function App() {
           if (localScene) rawData = JSON.parse(localScene)
         }
         if (rawData) {
-          const shapes = migrateScene(rawData)
-          const validated = z.array(ShapeSchema).parse(shapes)
+          const shapesData = migrateScene(rawData)
+          const validated = z.array(ShapeSchema).parse(shapesData)
           setShapes(validated)
           if (rawData.appState) {
             if (rawData.appState.stagePos) setStagePos(rawData.appState.stagePos)
@@ -319,13 +323,13 @@ export default function App() {
 
   useEffect(() => {
     if (transformerRef.current) {
-      const stage = stageRef.current;
-      if (!stage) return;
-      const nodes = selectedIds.map(id => stage.findOne(`#${id}`)).filter(Boolean);
-      transformerRef.current.nodes(nodes as Konva.Node[]);
-      transformerRef.current.getLayer()?.batchDraw();
+      const stage = stageRef.current
+      if (!stage) return
+      const nodes = selectedIds.map(id => stage.findOne(`#${id}`)).filter(Boolean)
+      transformerRef.current.nodes(nodes as Konva.Node[])
+      transformerRef.current.getLayer()?.batchDraw()
     }
-  }, [selectedIds, shapes]);
+  }, [selectedIds, shapes])
 
   const pushUndoState = (previousScene: Shape[]) => {
     setHistory((prev) => [...prev.slice(-SNAPSHOT_LIMIT + 1), previousScene])
@@ -337,8 +341,15 @@ export default function App() {
     setShapes(nextScene)
     if (roomId) {
       ydocRef.current.transact(() => {
-        yshapesRef.current.delete(0, yshapesRef.current.length)
-        yshapesRef.current.push(nextScene)
+        const nextIds = new Set(nextScene.map(s => s.id))
+        const currentInY = new Set(yshapesRef.current.keys())
+        currentInY.forEach(id => { if (!nextIds.has(id)) yshapesRef.current.delete(id) })
+        nextScene.forEach(shape => {
+          const existing = yshapesRef.current.get(shape.id)
+          if (!existing || JSON.stringify(existing) !== JSON.stringify(shape)) {
+            yshapesRef.current.set(shape.id, shape)
+          }
+        })
       })
     }
   }
@@ -373,7 +384,7 @@ export default function App() {
     })
   }, [stageScale, stagePos, viewport])
 
-  const handleMouseDown = () => {
+  const handleMouseDown = (e: any) => {
     const stage = stageRef.current
     if (!stage) return
     const p = pointerToCanvas(stage)
@@ -390,7 +401,13 @@ export default function App() {
       } else {
         const shapeNode = intersection.findAncestor('.konva-shape') || intersection
         const id = shapeNode.id()
-        if (id) setSelectedIds(prev => prev.includes(id) ? prev : [id])
+        if (id) {
+          if (e.evt.shiftKey) {
+            setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id])
+          } else {
+            setSelectedIds(prev => prev.includes(id) ? prev : [id])
+          }
+        }
       }
       return
     }
@@ -449,7 +466,7 @@ export default function App() {
       const y2 = Math.max(selectionRect.y, selectionRect.y + selectionRect.height)
       const boxSelected = shapes.filter(s => {
         if (s.type === 'rect' || s.type === 'text') return s.x >= x1 && s.x <= x2 && s.y >= y1 && s.y <= y2
-        if (s.type === 'ellipse') return s.x >= x1 && s.x <= x2 && s.y >= y1 && s.y <= y2
+        if (s.type === 'ellipse') return (s.x - s.radiusX) >= x1 && (s.x + s.radiusX) <= x2 && (s.y - s.radiusY) >= y1 && (s.y + s.radiusY) <= y2
         if (s.type === 'line' || s.type === 'arrow' || s.type === 'draw') return s.points.some((p, i) => i % 2 === 0 ? (p >= x1 && p <= x2) : (p >= y1 && p <= y2))
         return false
       }).map(s => s.id)
@@ -527,8 +544,8 @@ export default function App() {
     try {
       const content = await file.text()
       const rawData = JSON.parse(content)
-      const shapes = migrateScene(rawData)
-      const validated = z.array(ShapeSchema).parse(shapes)
+      const shapesData = migrateScene(rawData)
+      const validated = z.array(ShapeSchema).parse(shapesData)
       commitScene(validated)
       if (rawData.appState) {
         if (rawData.appState.stagePos) setStagePos(rawData.appState.stagePos)
@@ -660,13 +677,7 @@ export default function App() {
       const key = event.key.toLowerCase(), isMod = event.metaKey || event.ctrlKey
       if (isMod && key === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); return; }
       if (isMod && key === 'y') { event.preventDefault(); redo(); return; }
-      if (isMod && key === 'k') {
-        event.preventDefault()
-        setIsCommandPaletteOpen(prev => !prev)
-        setCommandSearch('')
-        return
-      }
-
+      if (isMod && key === 'k') { event.preventDefault(); setIsCommandPaletteOpen(prev => !prev); setCommandSearch(''); return; }
       if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); removeSelected(); return; }
       if (key === 'v') setTool('select')
       if (key === 'h') setTool('pan')
@@ -695,26 +706,12 @@ export default function App() {
   }, [redo, removeSelected, undo, zoomByStep, activeTool, shapes, stroke, strokeWidth, roughness, fillStyle, editingId, finishEditing, isCommandPaletteOpen])
 
   const centerScene = () => {
-    if (shapes.length === 0) {
-      setStagePos({ x: 0, y: 0 })
-      setStageScale(1)
-      return
-    }
+    if (shapes.length === 0) { setStagePos({ x: 0, y: 0 }); setStageScale(1); return; }
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     shapes.forEach(s => {
-      if (s.type === 'rect' || s.type === 'text') {
-        minX = Math.min(minX, s.x); minY = Math.min(minY, s.y)
-        maxX = Math.max(maxX, s.x + (s.type === 'rect' ? s.width : 100))
-        maxY = Math.max(maxY, s.y + (s.type === 'rect' ? s.height : 24))
-      } else if (s.type === 'ellipse') {
-        minX = Math.min(minX, s.x - s.radiusX); minY = Math.min(minY, s.y - s.radiusY)
-        maxX = Math.max(maxX, s.x + s.radiusX); maxY = Math.max(maxY, s.y + s.radiusY)
-      } else {
-        for (let i = 0; i < s.points.length; i += 2) {
-          minX = Math.min(minX, s.points[i]); minY = Math.min(minY, s.points[i+1])
-          maxX = Math.max(maxX, s.points[i]); maxY = Math.max(maxY, s.points[i+1])
-        }
-      }
+      if (s.type === 'rect' || s.type === 'text') { minX = Math.min(minX, s.x); minY = Math.min(minY, s.y); maxX = Math.max(maxX, s.x + (s.type === 'rect' ? s.width : 100)); maxY = Math.max(maxY, s.y + (s.type === 'rect' ? s.height : 24)); }
+      else if (s.type === 'ellipse') { minX = Math.min(minX, s.x - s.radiusX); minY = Math.min(minY, s.y - s.radiusY); maxX = Math.max(maxX, s.x + s.radiusX); maxY = Math.max(maxY, s.y + s.radiusY); }
+      else { for (let i = 0; i < s.points.length; i += 2) { minX = Math.min(minX, s.points[i]); minY = Math.min(minY, s.points[i+1]); maxX = Math.max(maxX, s.points[i]); maxY = Math.max(maxY, s.points[i+1]); } }
     })
     const centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2
     setStagePos({ x: viewport.width / 2 - centerX * stageScale, y: viewport.height / 2 - centerY * stageScale })
@@ -738,23 +735,10 @@ export default function App() {
     <div className={`workspace-shell ${isDarkMode ? 'dark-theme' : ''}`}>
       {showAssets && (
         <aside className="assets-sidebar panel">
-          <div className="sidebar-header">
-            <h3>Asset Library</h3>
-            <button className="icon-btn" onClick={() => setShowAssets(false)}><Trash2 size={14} /></button>
-          </div>
+          <div className="sidebar-header"><h3>Asset Library</h3><button className="icon-btn" onClick={() => setShowAssets(false)}><Trash2 size={14} /></button></div>
           <div className="assets-grid">
             {DEFAULT_ASSETS.map(asset => (
-              <div 
-                key={asset.id} 
-                className="asset-item"
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData('claw_asset', JSON.stringify(asset))}
-                onClick={() => {
-                  const id = uid()
-                  const shape: any = { ...asset, id, x: 100, y: 100, label: undefined }
-                  commitScene([...shapes, shape])
-                }}
-              >
+              <div key={asset.id} className="asset-item" draggable onDragStart={(e) => e.dataTransfer.setData('claw_asset', JSON.stringify(asset))} onClick={() => { const id = uid(); const shape: any = { ...asset, id, x: 100, y: 100, label: undefined }; commitScene([...shapes, shape]) }}>
                 <div className="asset-preview" style={{ background: asset.fill === '#00000000' ? '#eee' : asset.fill, borderColor: asset.stroke }}></div>
                 <span>{asset.label}</span>
               </div>
@@ -765,30 +749,8 @@ export default function App() {
       {isCommandPaletteOpen && (
         <div className="command-palette-overlay" onClick={() => setIsCommandPaletteOpen(false)}>
           <div className="command-palette" onClick={e => e.stopPropagation()}>
-            <div className="command-search-wrapper">
-              <Command size={18} />
-              <input 
-                autoFocus 
-                placeholder="Type a command..." 
-                value={commandSearch} 
-                onChange={e => setCommandSearch(e.target.value)} 
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && filteredCommands.length > 0) {
-                    filteredCommands[0].action()
-                    setIsCommandPaletteOpen(false)
-                  }
-                }}
-              />
-            </div>
-            <div className="command-list">
-              {filteredCommands.map(c => (
-                <div key={c.id} className="command-item" onClick={() => { c.action(); setIsCommandPaletteOpen(false); }}>
-                  <c.icon size={16} />
-                  <span>{c.label}</span>
-                </div>
-              ))}
-              {filteredCommands.length === 0 && <div className="command-empty">No commands found</div>}
-            </div>
+            <div className="command-search-wrapper"><Command size={18} /><input autoFocus placeholder="Type a command..." value={commandSearch} onChange={e => setCommandSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && filteredCommands.length > 0) { filteredCommands[0].action(); setIsCommandPaletteOpen(false); } }} /></div>
+            <div className="command-list">{filteredCommands.map(c => (<div key={c.id} className="command-item" onClick={() => { c.action(); setIsCommandPaletteOpen(false); }}><c.icon size={16} /><span>{c.label}</span></div>))}{filteredCommands.length === 0 && <div className="command-empty">No commands found</div>}</div>
           </div>
         </div>
       )}
@@ -798,7 +760,23 @@ export default function App() {
           value={editingText} onChange={(e) => setEditingText(e.target.value)} onBlur={finishEditing}
         />
       )}
-      <Stage ref={(node) => { stageRef.current = node }} className={`stage ${showGrid ? 'show-grid' : ''}`} width={viewport.width} height={viewport.height} draggable={activeTool === 'pan'} x={stagePos.x} y={stagePos.y} scaleX={stageScale} scaleY={stageScale} onDragEnd={(e) => setStagePos({ x: e.target.x(), y: e.target.y() })} onWheel={(e) => { e.evt.preventDefault(); const p = stageRef.current?.getPointerPosition(); if (p) setZoomAroundPoint(stageScale + (e.evt.deltaY > 0 ? -1 : 1) * 0.08, p); }} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onTouchStart={() => setTouchStatus('Drawing...')} onTouchEnd={() => setTouchStatus(null)}>
+      <Stage ref={(node) => { stageRef.current = node }} className={`stage ${showGrid ? 'show-grid' : ''}`} width={viewport.width} height={viewport.height} draggable={activeTool === 'pan'} x={stagePos.x} y={stagePos.y} scaleX={stageScale} scaleY={stageScale} 
+        onDragEnd={(e) => setStagePos({ x: e.target.x(), y: e.target.y() })} 
+        onWheel={(e) => { e.evt.preventDefault(); const p = stageRef.current?.getPointerPosition(); if (p) setZoomAroundPoint(stageScale + (e.evt.deltaY > 0 ? -1 : 1) * 0.08, p); }} 
+        onMouseDown={(e) => handleMouseDown(e)} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} 
+        onDragOver={(e: any) => e.evt.preventDefault()}
+        onDrop={(e: any) => {
+          e.evt.preventDefault()
+          const data = e.evt.dataTransfer?.getData('claw_asset')
+          if (data && stageRef.current) {
+            const asset = JSON.parse(data)
+            const p = pointerToCanvas(stageRef.current) || { x: 100, y: 100 }
+            const id = uid()
+            const shape: any = { ...asset, id, x: p.x, y: p.y, label: undefined }
+            commitScene([...shapes, shape])
+          }
+        }}
+        onTouchStart={() => setTouchStatus('Drawing...')} onTouchEnd={() => setTouchStatus(null)}>
         <Layer>
           {shapes.map((shape) => {
             const isSelected = selectedIds.includes(shape.id)
@@ -808,25 +786,38 @@ export default function App() {
                   onDragEnd={(e) => { if (e.target !== e.currentTarget) return; commitScene(shapes.map(s => s.id === shape.id ? { ...s, x: e.target.x(), y: e.target.y() } : s)) }}
                   onTransformEnd={(e) => { const node = e.target; commitScene(shapes.map(s => s.id === shape.id ? { ...s, x: node.x(), y: node.y(), fontSize: (s as TextShape).fontSize * node.scaleX(), angle: node.rotation() } : s)); node.scaleX(1); node.scaleY(1); }}
                   onDblClick={() => { setEditingId(shape.id); setEditingText(shape.text); }}
-                  onClick={(e) => { if (activeTool !== 'select') return; e.cancelBubble = true; if (e.evt.shiftKey) setSelectedIds(prev => prev.includes(shape.id) ? prev.filter(id => id !== shape.id) : [...prev, shape.id]); else setSelectedIds([shape.id]); }}
+                  onClick={(e) => { if (activeTool !== 'select') return; e.cancelBubble = true; }}
                 />
               )
             }
             const common = {
               key: shape.id, id: shape.id, draggable: activeTool === 'select' && isSelected,
-              onClick: (e: any) => { if (activeTool !== 'select') return; e.cancelBubble = true; if (e.evt.shiftKey) setSelectedIds(prev => prev.includes(shape.id) ? prev.filter(id => id !== shape.id) : [...prev, shape.id]); else setSelectedIds([shape.id]); },
               onDragStart: () => { dragSnapshotRef.current = shapes },
               onDragEnd: (e: any) => { if (e.target !== e.currentTarget) return; const nx = e.target.x(), ny = e.target.y(); const next = shapes.map(s => { if (!selectedIds.includes(s.id)) return s; if (s.type === 'rect' || s.type === 'ellipse' || s.type === 'text') return { ...s, x: s.x + nx, y: s.y + ny }; return { ...s, points: s.points.map((p, i) => i % 2 === 0 ? p + nx : p + ny) }; }); if (dragSnapshotRef.current) commitScene(next, dragSnapshotRef.current); else setShapes(next); dragSnapshotRef.current = null; e.target.position({ x: 0, y: 0 }); },
               onTransformEnd: (e: any) => { const node = e.target; const next = shapes.map(s => { if (s.id !== shape.id) return s; if (s.type === 'rect') return { ...s, x: node.x(), y: node.y(), width: s.width * node.scaleX(), height: s.height * node.scaleY(), angle: node.rotation() }; if (s.type === 'ellipse') return { ...s, x: node.x(), y: node.y(), radiusX: s.radiusX * node.scaleX(), radiusY: s.radiusY * node.scaleY(), angle: node.rotation() }; return s; }); commitScene(next); node.scaleX(1); node.scaleY(1); },
+              onClick: (e: any) => { if (activeTool !== 'select') return; e.cancelBubble = true; },
               sceneFunc: (context: any, shapeNode: any) => {
-                shapeNode.name('konva-shape'); const roughCanvas = rough.canvas(context.canvas._canvas)
+                shapeNode.name('konva-shape')
+                const roughCanvas = rough.canvas(context.canvas._canvas)
                 const options = { stroke: shape.stroke, strokeWidth: shape.strokeWidth, roughness: shape.roughness, fill: shape.fill === '#00000000' ? undefined : shape.fill, fillStyle: shape.fillStyle }
-                context.save(); if (shape.angle) { const cx = (shape as any).x || 0, cy = (shape as any).y || 0; context.translate(cx, cy); context.rotate(shape.angle * Math.PI / 180); context.translate(-cx, -cy); }
+                const ctx = context._context
+                ctx.save()
+                // We don't apply matrix here because roughCanvas draws directly to the canvas element.
+                // Instead, we just let Konva do its thing and use absolute positions for now.
+                // TODO: Proper relative drawing in Phase 6.
                 if (shape.type === 'rect') roughCanvas.draw(generator.rectangle(shape.x, shape.y, shape.width, shape.height, options))
                 else if (shape.type === 'ellipse') roughCanvas.draw(generator.ellipse(shape.x, shape.y, shape.radiusX * 2, shape.radiusY * 2, options))
-                else if (shape.type === 'line' || shape.type === 'arrow') { roughCanvas.draw(generator.line(shape.points[0], shape.points[1], shape.points[2], shape.points[3], options)); if (shape.type === 'arrow') { const x1 = shape.points[0], y1 = shape.points[1], x2 = shape.points[2], y2 = shape.points[3], angle = Math.atan2(y2 - y1, x2 - x1), headLength = 15; roughCanvas.draw(generator.line(x2, y2, x2 - headLength * Math.cos(angle - Math.PI / 6), y2 - headLength * Math.sin(angle - Math.PI / 6), options)); roughCanvas.draw(generator.line(x2, y2, x2 - headLength * Math.cos(angle + Math.PI / 6), y2 - headLength * Math.sin(angle + Math.PI / 6), options)); } }
+                else if (shape.type === 'line' || shape.type === 'arrow') { 
+                  roughCanvas.draw(generator.line(shape.points[0], shape.points[1], shape.points[2], shape.points[3], options))
+                  if (shape.type === 'arrow') {
+                    const x1 = shape.points[0], y1 = shape.points[1], x2 = shape.points[2], y2 = shape.points[3], angle = Math.atan2(y2 - y1, x2 - x1), headLength = 15
+                    roughCanvas.draw(generator.line(x2, y2, x2 - headLength * Math.cos(angle - Math.PI / 6), y2 - headLength * Math.sin(angle - Math.PI / 6), options))
+                    roughCanvas.draw(generator.line(x2, y2, x2 - headLength * Math.cos(angle + Math.PI / 6), y2 - headLength * Math.sin(angle + Math.PI / 6), options))
+                  }
+                }
                 else if (shape.type === 'draw') { const pts: [number, number][] = []; for (let i = 0; i < shape.points.length; i += 2) pts.push([shape.points[i], shape.points[i+1]]); roughCanvas.draw(generator.curve(pts, options)) }
-                context.restore(); context.fillStrokeShape(shapeNode)
+                ctx.restore()
+                context.fillStrokeShape(shapeNode)
               }
             }
             return <KonvaShape {...common} />
@@ -836,31 +827,9 @@ export default function App() {
           {Array.from(peers.entries()).map(([id, user]) => <KonvaShape key={id} sceneFunc={(context) => { context.beginPath(); context.fillStyle = '#4f46e5'; context.moveTo(user.x, user.y); context.lineTo(user.x + 10, user.y + 20); context.lineTo(user.x + 20, user.y + 10); context.closePath(); context.fill(); context.font = '12px sans-serif'; context.fillText(user.name, user.x + 20, user.y + 30); }} />)}
         </Layer>
       </Stage>
-      <header className="top-bar panel">
-        <div className="brand"><div className="brand-dot" /><div><strong>ClawCanvas</strong><p>Agentic sketchpad powered by OpenClaw</p></div></div>
-        <div className="actions">
-          {roomId ? <div className="room-indicator"><Users size={16} /><span>Room: {roomId}</span></div> : <button className="action-button primary" onClick={joinOrCreateRoom}><Users size={16} /> Live Collab</button>}
-          <button className="action-button" onClick={undo} title="Undo (Ctrl/Cmd + Z)"><Undo2 size={16} /> Undo</button>
-          <button className="action-button" onClick={redo} title="Redo (Ctrl/Cmd + Y)"><Redo2 size={16} /> Redo</button>
-          <button className="action-button" onClick={shareDrawing}><Share2 size={16} />{shareState === 'publishing' ? 'Publishing...' : shareState === 'copied' ? 'Link copied' : shareState === 'failed' ? 'Fallback copied' : 'Share'}</button>
-          <button className="action-button" onClick={exportPng}><ImageDown size={16} /> PNG</button>
-          <button className="action-button" onClick={exportSvg}><FileCode size={16} /> SVG</button>
-          <button className="action-button" onClick={exportJson}><Download size={16} /> JSON</button>
-          <label className="action-button upload"><Upload size={16} /> Import<input type="file" accept="application/json" onChange={importJson} /></label>
-          <button className="action-button danger" onClick={() => { if (!shapes.length) return; commitScene([]); setSelectedIds([]); }}><Trash2 size={16} /> Clear</button>
-        </div>
-      </header>
+      <header className="top-bar panel"><div className="brand"><div className="brand-dot" /><div><strong>ClawCanvas</strong><p>Agentic sketchpad powered by OpenClaw</p></div></div><div className="actions">{roomId ? <div className="room-indicator"><Users size={16} /><span>Room: {roomId}</span></div> : <button className="action-button primary" onClick={joinOrCreateRoom}><Users size={16} /> Live Collab</button>}<button className="action-button" onClick={undo} title="Undo (Ctrl/Cmd + Z)"><Undo2 size={16} /> Undo</button><button className="action-button" onClick={redo} title="Redo (Ctrl/Cmd + Y)"><Redo2 size={16} /> Redo</button><button className="action-button" onClick={shareDrawing}><Share2 size={16} />{shareState === 'publishing' ? 'Publishing...' : shareState === 'copied' ? 'Link copied' : shareState === 'failed' ? 'Fallback copied' : 'Share'}</button><button className="action-button" onClick={exportPng}><ImageDown size={16} /> PNG</button><button className="action-button" onClick={exportSvg}><FileCode size={16} /> SVG</button><button className="action-button" onClick={exportJson}><Download size={16} /> JSON</button><label className="action-button upload"><Upload size={16} /> Import<input type="file" accept="application/json" onChange={importJson} /></label><button className="action-button danger" onClick={() => { if (!shapes.length) return; commitScene([]); setSelectedIds([]); }}><Trash2 size={16} /> Clear</button></div></header>
       <aside className="left-rail panel">{TOOL_DEFINITIONS.map((entry) => { const Icon = entry.icon; return <button key={entry.id} className={`rail-button ${activeTool === entry.id ? 'active' : ''}`} onClick={() => setTool(entry.id)} title={`${entry.label} (${entry.shortcut})`}><Icon size={18} /><span>{entry.shortcut}</span></button> })}</aside>
-      <aside className="right-panel panel">
-        <h3>Properties</h3><p>{selectedIds.length > 0 ? `Selected: ${selectedIds.length} objects` : 'No shape selected'}</p>
-        <div className="control-row"><label>Stroke</label><input type="color" value={stroke} onChange={(e) => { const next = e.target.value; setStroke(next); if (selectedIds.length > 0) setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, stroke: next } : s)) }} /></div>
-        <div className="control-row"><label>Fill</label><input type="color" value={fill === '#00000000' ? '#ffffff' : fill} onChange={(e) => { const next = e.target.value; setFill(next); if (selectedIds.length > 0) setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, fill: next } : s)) }} /></div>
-        <div className="control-column"><label>Stroke width: {strokeWidth}px</label><input type="range" min={1} max={12} value={strokeWidth} onChange={(e) => { const next = Number(e.target.value); setStrokeWidth(next); if (selectedIds.length > 0) setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, strokeWidth: next } : s)) }} /></div>
-        <div className="control-column"><label>Roughness: {roughness}</label><input type="range" min={0} max={5} step={0.5} value={roughness} onChange={(e) => { const next = Number(e.target.value); setRoughness(next); if (selectedIds.length > 0) setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, roughness: next } : s)) }} /></div>
-        <div className="control-column"><label>Fill Style</label><select value={fillStyle} onChange={(e) => { const next = e.target.value as Shape['fillStyle']; setFillStyle(next); if (selectedIds.length > 0) setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, fillStyle: next } : s)) }} className="action-button full"><option value="hachure">Hachure</option><option value="solid">Solid</option><option value="zigzag">Zigzag</option><option value="cross-hatch">Cross-hatch</option><option value="dots">Dots</option><option value="sunburst">Sunburst</option></select></div>
-        <div className="control-column"><label>Zoom: {Math.round(stageScale * 100)}%</label><div className="zoom-actions"><button className="action-button" onClick={() => zoomByStep(-1)}><ZoomOut size={15} /></button><button className="action-button" onClick={() => zoomByStep(1)}><ZoomIn size={15} /></button></div></div>
-        {selectedIds.length > 0 && <button className="action-button danger full" onClick={removeSelected}><Trash2 size={15} /> Delete selected</button>}
-      </aside>
+      <aside className="right-panel panel"><h3>Properties</h3><p>{selectedIds.length > 0 ? `Selected: ${selectedIds.length} objects` : 'No shape selected'}</p><div className="control-row"><label>Stroke</label><input type="color" value={stroke} onChange={(e) => { const next = e.target.value; setStroke(next); if (selectedIds.length > 0) setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, stroke: next } : s)) }} /></div><div className="control-row"><label>Fill</label><input type="color" value={fill === '#00000000' ? '#ffffff' : fill} onChange={(e) => { const next = e.target.value; setFill(next); if (selectedIds.length > 0) setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, fill: next } : s)) }} /></div><div className="control-column"><label>Stroke width: {strokeWidth}px</label><input type="range" min={1} max={12} value={strokeWidth} onChange={(e) => { const next = Number(e.target.value); setStrokeWidth(next); if (selectedIds.length > 0) setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, strokeWidth: next } : s)) }} /></div><div className="control-column"><label>Roughness: {roughness}</label><input type="range" min={0} max={5} step={0.5} value={roughness} onChange={(e) => { const next = Number(e.target.value); setRoughness(next); if (selectedIds.length > 0) setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, roughness: next } : s)) }} /></div><div className="control-column"><label>Fill Style</label><select value={fillStyle} onChange={(e) => { const next = e.target.value as Shape['fillStyle']; setFillStyle(next); if (selectedIds.length > 0) setShapes(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, fillStyle: next } : s)) }} className="action-button full"><option value="hachure">Hachure</option><option value="solid">Solid</option><option value="zigzag">Zigzag</option><option value="cross-hatch">Cross-hatch</option><option value="dots">Dots</option><option value="sunburst">Sunburst</option></select></div><div className="control-column"><label>Zoom: {Math.round(stageScale * 100)}%</label><div className="zoom-actions"><button className="action-button" onClick={() => zoomByStep(-1)}><ZoomOut size={15} /></button><button className="action-button" onClick={() => zoomByStep(1)}><ZoomIn size={15} /></button></div></div>{selectedIds.length > 0 && <button className="action-button danger full" onClick={removeSelected}><Trash2 size={15} /> Delete selected</button>}</aside>
       <footer className="bottom-hud panel"><div className="hud-hints"><span>Space = temporary pan</span><span>V/H/R/O/L/A/P/T = quick tools</span><span>{shapes.length} objects</span>{touchStatus && <span className="touch-badge">{touchStatus}</span>}</div><div className="credits">made with <strong>OpenClaw</strong> &lt;3 <strong>RJ</strong></div></footer>
     </div>
   )
