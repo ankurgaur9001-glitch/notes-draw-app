@@ -433,7 +433,8 @@ export default function App() {
         angle: 0,
       }
       
-      setShapes(prev => [...prev, newTextShape])
+      const nextShapes = [...shapes, newTextShape]
+      setShapes(nextShapes)
       setEditingId(id)
       setEditingText('')
       return
@@ -608,8 +609,8 @@ export default function App() {
     if (shape && editingText.trim() === '') {
       setShapes(prev => prev.filter(s => s.id !== editingId))
     } else {
-      setShapes(prev => prev.map(s => s.id === editingId ? { ...s, text: editingText } : s))
-      pushUndoState(shapes.filter(s => s.id !== editingId))
+      const nextShapes = shapes.map(s => s.id === editingId ? { ...s, text: editingText } : s)
+      commitScene(nextShapes)
     }
     setEditingId(null)
     setEditingText('')
@@ -890,13 +891,41 @@ export default function App() {
       if (event.code === 'Space') setSpacePan(false)
     }
 
+    const onPaste = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData('text')
+      if (text && activeTool === 'text') {
+        const stage = stageRef.current
+        if (!stage) return
+        const p = pointerToCanvas(stage) || { x: 100, y: 100 }
+        
+        const id = uid()
+        const newTextShape: TextShape = {
+          id,
+          type: 'text',
+          x: p.x,
+          y: p.y,
+          text: text,
+          fontSize: 24,
+          stroke,
+          fill: '#00000000',
+          strokeWidth,
+          roughness,
+          fillStyle,
+          angle: 0,
+        }
+        commitScene([...shapes, newTextShape])
+      }
+    }
+
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('paste', onPaste)
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('paste', onPaste)
     }
-  }, [redo, removeSelected, undo, zoomByStep])
+  }, [redo, removeSelected, undo, zoomByStep, activeTool, shapes, stroke, strokeWidth, roughness, fillStyle])
 
   return (
     <div className="workspace-shell">
