@@ -2,10 +2,13 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { Layer, Stage, Text, Shape as KonvaShape, Transformer } from 'react-konva'
 import type Konva from 'konva'
 import rough from 'roughjs'
+import { z } from 'zod'
+import { fromError } from 'zod-validation-error'
 import {
   ArrowRight,
   Circle as CircleIcon,
   Download,
+  FileCode,
   Hand,
   ImageDown,
   Minus,
@@ -44,6 +47,87 @@ type TextShape = ShapeBase & { type: 'text'; x: number; y: number; text: string;
 
 type Shape = RectShape | EllipseShape | LineShape | DrawShape | TextShape
 
+const CURRENT_VERSION = 3
+const LOCAL_SCENE_KEY = 'notes-draw-app.scene.v3'
+
+const ShapeSchema = z.discriminatedUnion('type', [
+  z.object({
+    id: z.string(),
+    type: z.literal('rect'),
+    x: z.number(),
+    y: z.number(),
+    width: z.number(),
+    height: z.number(),
+    stroke: z.string(),
+    fill: z.string(),
+    strokeWidth: z.number(),
+    roughness: z.number(),
+    fillStyle: z.enum(['hachure', 'solid', 'zigzag', 'cross-hatch', 'dots', 'sunburst']),
+    angle: z.number(),
+  }),
+  z.object({
+    id: z.string(),
+    type: z.literal('ellipse'),
+    x: z.number(),
+    y: z.number(),
+    radiusX: z.number(),
+    radiusY: z.number(),
+    stroke: z.string(),
+    fill: z.string(),
+    strokeWidth: z.number(),
+    roughness: z.number(),
+    fillStyle: z.enum(['hachure', 'solid', 'zigzag', 'cross-hatch', 'dots', 'sunburst']),
+    angle: z.number(),
+  }),
+  z.object({
+    id: z.string(),
+    type: z.union([z.literal('line'), z.literal('arrow')]),
+    points: z.array(z.number()),
+    stroke: z.string(),
+    fill: z.string(),
+    strokeWidth: z.number(),
+    roughness: z.number(),
+    fillStyle: z.enum(['hachure', 'solid', 'zigzag', 'cross-hatch', 'dots', 'sunburst']),
+    angle: z.number(),
+  }),
+  z.object({
+    id: z.string(),
+    type: z.literal('draw'),
+    points: z.array(z.number()),
+    stroke: z.string(),
+    fill: z.string(),
+    strokeWidth: z.number(),
+    roughness: z.number(),
+    fillStyle: z.enum(['hachure', 'solid', 'zigzag', 'cross-hatch', 'dots', 'sunburst']),
+    angle: z.number(),
+  }),
+  z.object({
+    id: z.string(),
+    type: z.literal('text'),
+    x: z.number(),
+    y: z.number(),
+    text: z.string(),
+    fontSize: z.number(),
+    stroke: z.string(),
+    fill: z.string(),
+    strokeWidth: z.number(),
+    roughness: z.number(),
+    fillStyle: z.enum(['hachure', 'solid', 'zigzag', 'cross-hatch', 'dots', 'sunburst']),
+    angle: z.number(),
+  }),
+])
+
+const SceneSchema = z.object({
+  version: z.number(),
+  shapes: z.array(ShapeSchema),
+  appState: z.object({
+    stagePos: z.object({ x: z.number(), y: z.number() }).optional(),
+    stageScale: z.number().optional(),
+  }).optional(),
+})
+
+type Scene = z.infer<typeof SceneSchema>
+
 type ToolDefinition = {
   id: Tool
   label: string
@@ -63,10 +147,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 ]
 
 const SNAPSHOT_LIMIT = 100
-const LOCAL_SCENE_KEY = 'notes-draw-app.scene.v2'
 const JSONBLOB_ENDPOINT = 'https://jsonblob.com/api/jsonBlob'
 
 const generator = rough.generator()
+
+const migrateScene = (data: any): Shape[] => {
+  // Migration logic
+  if (Array.isArray(data)) {
+    // V1/V2 format: just an array of shapes
+    return data as Shape[]
+  }
+  
+  if (data && typeof data === 'object' && 'version' in data) {
+    if (data.version === 3) {
+      return data.shapes
+    }
+  }
+  
+  return []
+}
 
 const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`
 
@@ -117,33 +216,42 @@ export default function App() {
         const params = new URLSearchParams(window.location.search)
         const blobId = params.get('blob')
 
+        let rawData: any = null
+
         if (blobId) {
           const response = await fetch(`${JSONBLOB_ENDPOINT}/${blobId}`)
           if (response.ok) {
-            const payload = (await response.json()) as Shape[]
-            if (Array.isArray(payload)) {
-              setShapes(payload)
-              return
-            }
+            rawData = await response.json()
           }
         }
 
         const encoded = params.get('drawing')
-        if (encoded) {
-          const parsed = decodeDrawing(encoded)
-          if (Array.isArray(parsed)) {
-            setShapes(parsed)
-            return
+        if (!rawData && encoded) {
+          rawData = decodeDrawing(encoded)
+        }
+
+        if (!rawData) {
+          const localScene = localStorage.getItem(LOCAL_SCENE_KEY) || localStorage.getItem('notes-draw-app.scene.v2')
+          if (localScene) {
+            rawData = JSON.parse(localScene)
           }
         }
 
-        const localScene = localStorage.getItem(LOCAL_SCENE_KEY)
-        if (localScene) {
-          const parsed = JSON.parse(localScene) as Shape[]
-          if (Array.isArray(parsed)) setShapes(parsed)
+        if (rawData) {
+          const shapes = migrateScene(rawData)
+          const validated = z.array(ShapeSchema).parse(shapes)
+          setShapes(validated)
+          
+          if (rawData.appState) {
+            if (rawData.appState.stagePos) setStagePos(rawData.appState.stagePos)
+            if (rawData.appState.stageScale) setStageScale(rawData.appState.stageScale)
+          }
         }
       } catch (error) {
         console.error('Failed to hydrate scene', error)
+        if (error instanceof z.ZodError) {
+          console.warn('Validation error:', fromError(error).toString())
+        }
       }
     }
 
@@ -152,11 +260,16 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(LOCAL_SCENE_KEY, JSON.stringify(shapes))
+      const scene: Scene = {
+        version: CURRENT_VERSION,
+        shapes,
+        appState: { stagePos, stageScale }
+      }
+      localStorage.setItem(LOCAL_SCENE_KEY, JSON.stringify(scene))
     } catch (error) {
       console.error('Autosave failed', error)
     }
-  }, [shapes])
+  }, [shapes, stagePos, stageScale])
 
   useEffect(() => {
     if (transformerRef.current) {
@@ -439,11 +552,16 @@ export default function App() {
   }, [editingId, editingText, shapes])
 
   const exportJson = () => {
-    const blob = new Blob([JSON.stringify(shapes, null, 2)], { type: 'application/json' })
+    const scene: Scene = {
+      version: CURRENT_VERSION,
+      shapes,
+      appState: { stagePos, stageScale }
+    }
+    const blob = new Blob([JSON.stringify(scene, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = 'drawing.json'
+    anchor.download = `drawing-${Date.now()}.json`
     anchor.click()
     URL.revokeObjectURL(url)
   }
@@ -454,13 +572,23 @@ export default function App() {
 
     try {
       const content = await file.text()
-      const parsed = JSON.parse(content) as Shape[]
-      if (!Array.isArray(parsed)) return
-      commitScene(parsed)
+      const rawData = JSON.parse(content)
+      const shapes = migrateScene(rawData)
+      const validated = z.array(ShapeSchema).parse(shapes)
+      
+      commitScene(validated)
+      if (rawData.appState) {
+        if (rawData.appState.stagePos) setStagePos(rawData.appState.stagePos)
+        if (rawData.appState.stageScale) setStageScale(rawData.appState.stageScale)
+      }
       setSelectedIds([])
     } catch (error) {
       console.error('Failed to import JSON', error)
-      alert('Invalid JSON file')
+      let msg = 'Invalid JSON file'
+      if (error instanceof z.ZodError) {
+        msg = fromError(error).toString()
+      }
+      alert(msg)
     } finally {
       event.target.value = ''
     }
@@ -472,8 +600,109 @@ export default function App() {
 
     const anchor = document.createElement('a')
     anchor.href = dataUrl
-    anchor.download = 'drawing.png'
+    anchor.download = `drawing-${Date.now()}.png`
     anchor.click()
+  }
+
+  const exportSvg = () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    const roughSvg = rough.svg(svg)
+    
+    // Find bounds
+    if (shapes.length === 0) return
+    
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    
+    shapes.forEach(s => {
+      if (s.type === 'rect' || s.type === 'text') {
+        minX = Math.min(minX, s.x); minY = Math.min(minY, s.y)
+        maxX = Math.max(maxX, s.x + (s.type === 'rect' ? s.width : 100))
+        maxY = Math.max(maxY, s.y + (s.type === 'rect' ? s.height : 24))
+      } else if (s.type === 'ellipse') {
+        minX = Math.min(minX, s.x - s.radiusX); minY = Math.min(minY, s.y - s.radiusY)
+        maxX = Math.max(maxX, s.x + s.radiusX); maxY = Math.max(maxY, s.y + s.radiusY)
+      } else {
+        for (let i = 0; i < s.points.length; i += 2) {
+          minX = Math.min(minX, s.points[i]); minY = Math.min(minY, s.points[i+1])
+          maxX = Math.max(maxX, s.points[i]); maxY = Math.max(maxY, s.points[i+1])
+        }
+      }
+    })
+    
+    const padding = 20
+    minX -= padding; minY -= padding; maxX += padding; maxY += padding
+    const width = maxX - minX
+    const height = maxY - minY
+    
+    svg.setAttribute('width', width.toString())
+    svg.setAttribute('height', height.toString())
+    svg.setAttribute('viewBox', `${minX} ${minY} ${width} ${height}`)
+    svg.setAttribute('style', 'background-color: transparent;')
+
+    shapes.forEach(shape => {
+      const options = {
+        stroke: shape.stroke,
+        strokeWidth: shape.strokeWidth,
+        roughness: shape.roughness,
+        fill: shape.fill === '#00000000' ? undefined : shape.fill,
+        fillStyle: shape.fillStyle,
+      }
+
+      let node: SVGElement | null = null
+      
+      if (shape.type === 'rect') {
+        node = roughSvg.rectangle(shape.x, shape.y, shape.width, shape.height, options)
+      } else if (shape.type === 'ellipse') {
+        node = roughSvg.ellipse(shape.x, shape.y, shape.radiusX * 2, shape.radiusY * 2, options)
+      } else if (shape.type === 'line' || shape.type === 'arrow') {
+        const group = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+        group.appendChild(roughSvg.line(shape.points[0], shape.points[1], shape.points[2], shape.points[3], options))
+        if (shape.type === 'arrow') {
+           const x1 = shape.points[0], y1 = shape.points[1], x2 = shape.points[2], y2 = shape.points[3]
+           const angle = Math.atan2(y2 - y1, x2 - x1)
+           const headLength = 15
+           group.appendChild(roughSvg.line(x2, y2, x2 - headLength * Math.cos(angle - Math.PI / 6), y2 - headLength * Math.sin(angle - Math.PI / 6), options))
+           group.appendChild(roughSvg.line(x2, y2, x2 - headLength * Math.cos(angle + Math.PI / 6), y2 - headLength * Math.sin(angle + Math.PI / 6), options))
+        }
+        node = group
+      } else if (shape.type === 'draw') {
+        const pts: [number, number][] = []
+        for (let i = 0; i < shape.points.length; i += 2) pts.push([shape.points[i], shape.points[i+1]])
+        node = roughSvg.curve(pts, options)
+      } else if (shape.type === 'text') {
+        const textNode = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+        textNode.setAttribute('x', shape.x.toString())
+        textNode.setAttribute('y', (shape.y + shape.fontSize).toString())
+        textNode.setAttribute('font-family', 'sans-serif')
+        textNode.setAttribute('font-size', shape.fontSize.toString())
+        textNode.setAttribute('fill', shape.stroke)
+        if (shape.angle) textNode.setAttribute('transform', `rotate(${shape.angle}, ${shape.x}, ${shape.y})`)
+        textNode.textContent = shape.text
+        node = textNode
+      }
+
+      if (node) {
+        if (shape.angle && shape.type !== 'text') {
+          let cx = 0, cy = 0
+          if (shape.type === 'rect' || shape.type === 'ellipse') {
+            cx = shape.x; cy = shape.y
+          } else {
+            cx = shape.points[0]; cy = shape.points[1]
+          }
+          node.setAttribute('transform', `rotate(${shape.angle}, ${cx}, ${cy})`)
+        }
+        svg.appendChild(node)
+      }
+    })
+
+    const svgData = new XMLSerializer().serializeToString(svg)
+    const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `drawing-${Date.now()}.svg`
+    anchor.click()
+    URL.revokeObjectURL(url)
   }
 
   const copyText = async (value: string) => {
@@ -898,6 +1127,9 @@ export default function App() {
           </button>
           <button className="action-button" onClick={exportPng}>
             <ImageDown size={16} /> PNG
+          </button>
+          <button className="action-button" onClick={exportSvg}>
+            <FileCode size={16} /> SVG
           </button>
           <button className="action-button" onClick={exportJson}>
             <Download size={16} /> JSON
