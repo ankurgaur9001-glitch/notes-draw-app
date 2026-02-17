@@ -1,45 +1,42 @@
-# Notes Draw App — Excalidraw Parity Roadmap
+# ClawCanvas — The Agentic Sketchpad Roadmap
 
-Goal: Build an Excalidraw-style product with your own codebase, feature parity, and better UX.
+Goal: Build a high-performance, collaborative drawing app that surpasses Excalidraw through "Agentic" capabilities and superior UX.
 
-## Phase 1 — UI Parity Shell (in progress)
+## Phase 1 — UI & Core (Complete ✅)
+- [x] Floating action bars & properties panel
+- [x] Keyboard-first navigation (Space-pan, shortcuts)
+- [x] Scene autosave & recovery
 
-- [x] Floating top action bar
-- [x] Left tool rail with shortcuts
-- [x] Right properties panel
-- [x] Bottom quick-hint HUD
-- [x] Keyboard-first flow (tool shortcuts, undo/redo, space-pan)
-- [x] Scene autosave recovery
-- [x] Share flow with hosted scene links
+## Phase 2 — Editing Parity (Complete ✅)
+- [x] Multi-select & box-drag
+- [x] Resize & Rotate handles
+- [x] RoughJS integration (Hand-drawn aesthetic)
+- [x] Inline text editing
 
-## Phase 2 — Editing Parity (next)
+## Phase 3 — Reliability & Files (Complete ✅)
+- [x] Zod-based scene validation
+- [x] V3 Versioning & Migration logic
+- [x] SVG/PNG export engines
 
-- [ ] Resize + rotate handles
-- [ ] Multi-select (drag box, shift-select)
-- [ ] Group / ungroup
-- [ ] Duplicate and align actions
-- [ ] Layer ordering (forward/back)
-- [ ] Better text editing UX (inline editing)
-- [ ] Sticky notes / diamond / image element
+## Phase 4 — Real-time Collab (Complete ✅)
+- [x] P2P WebRTC Sync (Yjs)
+- [x] Presence cursors & user labels
+- [x] Offline-first IndexedDB persistence
 
-## Phase 3 — Files & Reliability
+## Phase 5 — The "Agentic" Edge (NEXT 🚀)
+*Goal: Turn the canvas into an active assistant, not just a static sheet.*
+- [ ] **Smart Shape Recognition**: Convert rough pencil scribbles into perfect shapes (Circles, Squares, Arrows) automatically.
+- [ ] **AI "Scribble-to-Code"**: A button to "Explain/Generate" where an LLM looks at the canvas and generates React/Tailwind code for the diagram.
+- [ ] **Magic Connectivity**: Arrows that "stick" to shapes. Move the box, and the arrow stays connected.
+- [ ] **Command Palette (Ctrl+K)**: Quick actions to "Center Scene", "Clear All", or "Apply Dark Mode" via text.
 
-- [x] Scene versioning + migration guard
-- [x] Robust import validation (Zod)
-- [x] Safer export pipeline (PNG/SVG)
-- [x] Crash-safe session restore (Stage state)
+## Phase 6 — Professional Polish
+- [ ] **Smart Snapping**: Visual guides for alignment and equal spacing.
+- [ ] **Asset Library**: Drag-and-drop support for UI kits (buttons, inputs, icons).
+- [ ] **Infinite Canvas Optimization**: Use virtualization to handle thousands of elements without lag.
+- [ ] **Mind-Map Mode**: Auto-layout for tree structures.
 
-## Phase 4 — Collaboration
-
-- [x] Realtime room sessions (Yjs + WebRTC)
-- [x] Presence cursors
-- [x] Conflict-safe sync (CRDT)
-- [x] IndexedDB persistence for offline-first support
-
-## Phase 5 — Better UX than baseline
-
-- [ ] Command palette (Ctrl/Cmd + K)
-- [ ] Smart snapping + spacing guides
-- [ ] Mobile touch-first interactions
-- [ ] Performance tuning for large scenes
-- [ ] Polished onboarding + first-run tips
+## Phase 7 — Mobile & Ecosystem
+- [ ] **PWA Support**: Installable on desktop/mobile for native-feel.
+- [ ] **Touch Optimization**: Radial menus for tablet users.
+- [ ] **Obsidian/Notion Plugin**: Embed ClawCanvas directly into knowledge bases.
