@@ -802,8 +802,8 @@ export default function App() {
         <div className="brand">
           <div className="brand-dot" />
           <div>
-            <strong>Notes Draw</strong>
-            <p>Excali-style canvas, custom build</p>
+            <strong>ClawCanvas</strong>
+            <p>Agentic sketchpad powered by OpenClaw</p>
           </div>
         </div>
 
